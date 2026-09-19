@@ -1,0 +1,10 @@
+{
+  "name": "bachelor-prelaunch",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check app.js && node --check build.js && npm test && npm run build"
+  }
+}

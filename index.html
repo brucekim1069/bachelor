@@ -15,7 +15,7 @@
   <header class="topbar">
     <div class="wrap inner">
       <div class="brand">BACHELOR</div>
-      <a class="navcta" href="#notify">얼리버드 알림 받기</a>
+      <a class="navcta" href="#notify" data-track="cta_click" data-cta-id="waitlist" data-cta-location="header" data-cta-label="얼리버드 알림 받기">얼리버드 알림 받기</a>
     </div>
   </header>
   <main>
@@ -40,8 +40,8 @@
             <span class="badge">PRE-LAUNCH</span>
           </div>
           <div class="cta-row">
-            <a class="btn primary" href="#notify" data-track="waitlist_cta_hero">15,900원 얼리버드 알림</a>
-            <a class="btn secondary" href="#lineup" data-track="view_lineup">제품군 보기</a>
+            <a class="btn primary" href="#notify" data-track="cta_click" data-cta-id="waitlist" data-cta-location="hero" data-cta-label="15,900원 얼리버드 알림">15,900원 얼리버드 알림</a>
+            <a class="btn secondary" href="#lineup" data-track="cta_click" data-cta-id="view_lineup" data-cta-location="hero" data-cta-label="제품군 보기">제품군 보기</a>
           </div>
           <div class="micro">* 본 페이지는 출시 전 시장 반응 테스트용 프리런칭 페이지입니다.</div>
         </div>
@@ -196,7 +196,18 @@
             <input type="hidden" name="utm_medium" id="utm_medium" />
             <input type="hidden" name="utm_campaign" id="utm_campaign" />
             <input type="hidden" name="utm_content" id="utm_content" />
+            <input type="hidden" name="utm_term" id="utm_term" />
             <input type="hidden" name="fbclid" id="fbclid" />
+            <input type="hidden" name="gclid" id="gclid" />
+            <input type="hidden" name="wbraid" id="wbraid" />
+            <input type="hidden" name="gbraid" id="gbraid" />
+            <input type="hidden" name="landing_page" id="landing_page" />
+            <input type="hidden" name="referrer" id="referrer" />
+            <input type="hidden" name="attribution_captured_at" id="attribution_captured_at" />
+            <input type="hidden" name="consent_timestamp" id="consent_timestamp" />
+            <input type="hidden" name="privacy_policy_version" value="2026-09-19" />
+            <input type="hidden" name="event_id" id="event_id" />
+            <input type="hidden" name="tracking_version" id="tracking_version" />
             <p style="display:none"><label>Don’t fill this out: <input name="bot-field" /></label></p>
             <div class="eyebrow">Get notified</div>
             <h3>15,900원에 출시 알림 받기</h3>
@@ -224,8 +235,12 @@
                 <option>남자친구 / 남편 선물</option>
               </select>
             </div>
+            <label class="check intent-check">
+              <input type="checkbox" id="purchase_intent" name="purchase_intent" value="yes" />
+              <span><strong>구매 의향 · 선택</strong><br>15,900원이면 출시 즉시 구매할 의향이 있습니다.</span>
+            </label>
             <label class="check">
-              <input type="checkbox" id="privacy" required />
+              <input type="checkbox" id="privacy" name="privacy_consent" value="agreed" required />
               <span>출시 알림 제공을 위한 연락처 수집 및 이용에 동의합니다. 입력 정보는 출시 안내 목적으로만 사용합니다.</span>
             </label>
             <button type="submit">BACHELOR 출시 알림 신청</button>
@@ -267,7 +282,7 @@
     </div>
   </footer>
   <div class="mobile-stick">
-    <a href="#notify" data-track="waitlist_cta_sticky">
+    <a href="#notify" data-track="cta_click" data-cta-id="waitlist" data-cta-location="mobile_sticky" data-cta-label="얼리버드 15,900원 알림 받기">
       <span>얼리버드 15,900원</span>
       <span>알림 받기 →</span>
     </a>

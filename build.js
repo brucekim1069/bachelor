@@ -20,15 +20,17 @@ for (const file of copyFiles) {
 
 let app = fs.readFileSync(path.join(__dirname, 'app.js'), 'utf8');
 
-const replacements = [
-  ['G-REPLACE_ME', process.env.GA4_ID],
-  ['META_PIXEL_ID: "REPLACE_ME"', process.env.META_PIXEL_ID ? `META_PIXEL_ID: "${process.env.META_PIXEL_ID}"` : null],
-  ['CLARITY_PROJECT_ID: "REPLACE_ME"', process.env.CLARITY_PROJECT_ID ? `CLARITY_PROJECT_ID: "${process.env.CLARITY_PROJECT_ID}"` : null]
-];
+const analyticsOverrides = {
+  GA4_ID: process.env.GA4_ID,
+  META_PIXEL_ID: process.env.META_PIXEL_ID,
+  CLARITY_PROJECT_ID: process.env.CLARITY_PROJECT_ID
+};
 
-if (process.env.GA4_ID) app = app.replace('G-REPLACE_ME', process.env.GA4_ID);
-if (process.env.META_PIXEL_ID) app = app.replace('META_PIXEL_ID: "REPLACE_ME"', `META_PIXEL_ID: "${process.env.META_PIXEL_ID}"`);
-if (process.env.CLARITY_PROJECT_ID) app = app.replace('CLARITY_PROJECT_ID: "REPLACE_ME"', `CLARITY_PROJECT_ID: "${process.env.CLARITY_PROJECT_ID}"`);
+for (const [key, value] of Object.entries(analyticsOverrides)) {
+  if (!value) continue;
+  const pattern = new RegExp(`(${key}:\\s*)"[^"]*"`);
+  app = app.replace(pattern, `$1${JSON.stringify(value)}`);
+}
 
 fs.writeFileSync(path.join(dist, 'app.js'), app, 'utf8');
-console.log('BACHELOR build complete. Analytics IDs injected from Netlify env vars when present.');
+console.log('BACHELOR build complete. Analytics IDs validated and Netlify env overrides applied when present.');
