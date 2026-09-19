@@ -37,6 +37,8 @@ test('GA4 and Meta receive the complete prelaunch funnel', () => {
     assert.ok(app.includes(`"${eventName}"`), `Missing Meta event: ${eventName}`);
   }
   assert.match(app, /eventID: eventId/);
+  assert.match(app, /dataset\.lastTrackingEvent/);
+  assert.match(app, /dataset\.attributionKeys/);
 });
 
 test('lead value is not reported as product revenue', () => {

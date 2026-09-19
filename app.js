@@ -43,6 +43,10 @@ window.BACHELOR_CONFIG = {
       params: { ...params },
       timestamp: new Date().toISOString()
     });
+    if (document.documentElement) {
+      document.documentElement.dataset.lastTrackingEvent = `${platform}:${name}`;
+      document.documentElement.dataset.trackingEventCount = String(eventLog.length);
+    }
   }
 
   function gaEvent(name, params = {}) {
@@ -185,6 +189,12 @@ window.BACHELOR_CONFIG = {
     const trackingVersionField = form.elements.namedItem("tracking_version");
     if (trackingVersionField) trackingVersionField.value = TRACKING_VERSION;
     document.documentElement.dataset.trackingReady = "true";
+    document.documentElement.dataset.trackingVersion = TRACKING_VERSION;
+    document.documentElement.dataset.attributionSource = attribution.utm_source;
+    document.documentElement.dataset.attributionCampaign = attribution.utm_campaign || "";
+    document.documentElement.dataset.attributionKeys = ATTRIBUTION_KEYS
+      .filter(key => Boolean(attribution[key]))
+      .join(",");
 
     document.querySelectorAll('[data-track="cta_click"]').forEach(element => {
       element.addEventListener("click", () => {
