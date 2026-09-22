@@ -7,70 +7,64 @@ permissions: {}
 jobs:
   inspect-public-sources:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     steps:
-      - name: Inspect public pages without authentication or outreach
+      - name: Read public directory formats only
         run: |
           mkdir -p research-output
           python - <<'PY'
-          import urllib.request, urllib.parse, urllib.robotparser, json, pathlib, time, re, concurrent.futures
-          root = pathlib.Path('research-output')
-          agent = 'PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
-          sites = {
-              'inlink': 'https://inlink.to/discover',
-              'ndex': 'https://www.ndex.kr/',
-              'utoo': 'https://kr.utoo.be/rankings',
-              'allsns': 'https://allsnsrank.com/youtube/category/vlog',
-              'playboard': 'https://playboard.co/en/search?q=' + urllib.parse.quote('브이로그'),
-              'creatorrank': 'https://creatorrank.co.kr/',
-          }
-          def read(url, limit=3000000):
-              req = urllib.request.Request(url, headers={'User-Agent':agent, 'Accept':'text/html,application/json,text/plain,*/*'})
-              with urllib.request.urlopen(req, timeout=25) as r:
-                  return r.status, r.read(limit).decode('utf-8', errors='replace'), r.geturl()
-          def process(item):
-              label, url = item
-              result = {'label':label, 'url':url}
-              try:
-                  origin = urllib.parse.urlsplit(url)
-                  ru = f'{origin.scheme}://{origin.netloc}/robots.txt'
+          import urllib.request, urllib.parse, urllib.error, urllib.robotparser, json, pathlib, time, re, concurrent.futures
+          root=pathlib.Path('research-output')
+          agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
+          robots={}; manifest=[]
+          def allowed(url):
+              u=urllib.parse.urlsplit(url);host=u.scheme+'://'+u.netloc
+              if host not in robots:
+                  rp=urllib.robotparser.RobotFileParser()
                   try:
-                      status, robots, _ = read(ru, 100000)
-                      (root/f'{label}-robots.txt').write_text(robots)
-                      rp = urllib.robotparser.RobotFileParser(); rp.parse(robots.splitlines())
-                      result['robots_allowed'] = rp.can_fetch(agent,url)
-                      if not result['robots_allowed']:
-                          result['status']='robots_disallow'; return result
+                      req=urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent})
+                      with urllib.request.urlopen(req,timeout=15) as r:text=r.read(100000).decode('utf-8','replace')
+                      rp.parse(text.splitlines())
                   except urllib.error.HTTPError as e:
-                      if e.code not in (404,410):
-                          result['status']='robots_http_'+str(e.code); return result
-                  status, html, final = read(url)
-                  (root/f'{label}.html').write_text(html)
-                  result.update(status=status, final_url=final, bytes=len(html))
-                  scripts = re.findall(r'<script[^>]+src=[\"\x27]([^\"\x27]+)', html)
-                  links = re.findall(r'href=[\"\x27]([^\"\x27]+)',html)
-                  result['scripts']=[urllib.parse.urljoin(final,s) for s in scripts]
-                  result['links']=list(dict.fromkeys(links))[:300]
-                  for i,s in enumerate(result['scripts'][:8]):
-                      host=urllib.parse.urlsplit(s).netloc
-                      if host != urllib.parse.urlsplit(final).netloc: continue
-                      try:
-                          if 'rp' in locals() and not rp.can_fetch(agent,s):continue
-                          time.sleep(0.5)
-                          _, js, _ = read(s,2000000)
-                          (root/f'{label}-script-{i}.js').write_text(js)
-                      except Exception:pass
-              except Exception as e:
-                  result['error']=str(e)
-              return result
-          results=list(concurrent.futures.ThreadPoolExecutor(max_workers=3).map(process,sites.items()))
-          (root/'manifest.json').write_text(json.dumps(results,ensure_ascii=False,indent=2))
-          for r in results: print(r['label'],r.get('status'),r.get('bytes'),r.get('error',''), 'scripts',len(r.get('scripts',[])))
+                      rp.parse(['User-agent: *','Allow: /'] if e.code in (404,410) else ['User-agent: *','Disallow: /'])
+                  except Exception:rp.parse(['User-agent: *','Disallow: /'])
+                  robots[host]=rp
+              return robots[host].can_fetch(agent,url)
+          def get(label,url,data=None):
+              record={'label':label,'url':url}
+              try:
+                  if not allowed(url):raise RuntimeError('robots_disallow')
+                  headers={'User-Agent':agent,'Accept':'text/html,application/json,text/plain,*/*'}
+                  if data is not None:headers['Content-Type']='application/x-www-form-urlencoded'
+                  req=urllib.request.Request(url,data=data,headers=headers)
+                  with urllib.request.urlopen(req,timeout=25) as r:text=r.read(4000000).decode('utf-8','replace')
+                  (root/label).write_text(text)
+                  record['bytes']=len(text);record['ok']=True
+                  return text
+              except Exception as e:record['error']=str(e);return ''
+              finally:manifest.append(record)
+          def site_js(label,url):
+              h=get(label+'.html',url)
+              scripts=re.findall(r'<script[^>]+src=[\"\x27]([^\"\x27]+)',h)
+              for i,s in enumerate(scripts):
+                  s=urllib.parse.urljoin(url,s)
+                  if urllib.parse.urlsplit(s).netloc!=urllib.parse.urlsplit(url).netloc:continue
+                  time.sleep(0.35);get(label+'-script-'+str(i)+'.js',s)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+              list(ex.map(lambda x:site_js(*x),[('inlink','https://inlink.to/discover'),('utoo','https://kr.utoo.be/rankings')]))
+          for mid in [300975,150844,24921]:
+              time.sleep(0.6);get('inlink-profile-'+str(mid)+'.html','https://inlink.to/p/'+str(mid))
+          for c in ['vlog','beauty','life','sports','food']:
+              time.sleep(0.6);get('allsns-'+c+'.html','https://allsnsrank.com/youtube/category/'+c)
+          get('allsns-vlog-offset30.json','https://allsnsrank.com/sns/rank_api.php?sort=subscribers&region=KR&scope=category%3A5&offset=30')
+          get('ndex-review.json','https://www.ndex.kr/home/get_blogs_by_directory',urllib.parse.urlencode({'directory':'상품리뷰','limit':20}).encode())
+          (root/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
+          for r in manifest:print(r['label'],r.get('bytes',0),r.get('error',''))
           PY
       - name: Save short-lived public-source files
         uses: actions/upload-artifact@v4
         with:
-          name: public-creator-source-inspection
+          name: public-creator-source-inspection-2
           path: research-output/
           retention-days: 1
           compression-level: 9
