@@ -6,38 +6,49 @@ on:
 permissions:
   actions: read
 jobs:
-  supplemental-public-profiles:
+  additional-public-lifestyle-profiles:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 20
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: public-inlink-visible-cards
           run-id: 35679701735
           github-token: ${{ github.token }}
-          path: input
+          path: input1
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-inlink-supplemental-cards
+          run-id: 35680361599
+          github-token: ${{ github.token }}
+          path: input2
       - run: python -m pip install --quiet playwright beautifulsoup4
       - run: python -m playwright install --with-deps chromium
-      - name: Read additional visible public category and biography searches
+      - name: Find additional public lifestyle creators
         run: |
           mkdir -p research-output
           python -u - <<'PY'
-          import asyncio,json,pathlib,re,urllib.request,urllib.robotparser,urllib.parse,time
+          import asyncio,json,pathlib,re,urllib.request,urllib.robotparser,urllib.parse,urllib.error,time,threading,concurrent.futures
           from playwright.async_api import async_playwright
-          root=pathlib.Path('research-output');agent='PublicCreatorResearch/1.0 (public professional search; no outreach)'
+          from bs4 import BeautifulSoup
+          root=pathlib.Path('research-output');agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
+          known=set()
+          for folder in ['input1','input2']:
+              for f in pathlib.Path(folder).glob('*.json'):
+                  data=json.loads(f.read_text())
+                  if isinstance(data,list):known.update(str(x['member_number']) for x in data if isinstance(x,dict) and 'member_number' in x)
           rp=urllib.robotparser.RobotFileParser()
           with urllib.request.urlopen('https://inlink.to/robots.txt',timeout=20) as r:rp.parse(r.read().decode().splitlines())
-          terms=['리뷰','살림','주부','직장인','신혼','자취','일상','뷰티','화장품','여행','라이프스타일','패션','코덕','사진','영상','정성','꼼꼼','소통','취미','내돈내산','데이트','부부','인테리어','소품','추천','사용','생활','꾸미기','기록','셀프']
-          queries=[{'field':'bio','q':t,'platform':p,'age':age} for t in terms for p in ['instagram','naver_blog'] for age in ['20s','30s','40s']]
-          queries += [{'category':c,'platform':p,'city':city,'age':'50s'} for city in ['Seoul','Gyeonggi','Incheon','Busan','Daegu','Daejeon','Gwangju','Gangwon','Jeju'] for c in ['lifestyle','supplies','beauty','travel'] for p in ['instagram','naver_blog']]
-          rows={};errors=[];done=0
+          terms=['신혼','자취','살림','일상','뷰티','화장품','직장인','라이프스타일','셀프','소품','소통','정성','꼼꼼','기록','패션','여행']
+          queries=[{'field':'bio','q':t,'platform':p,'city':city} for t in terms for p in ['naver_blog','instagram'] for city in ['Seoul','Gyeonggi','Busan','Incheon']]
+          rows={};errors=[];done=0;stop=False
           labels={'네이버 블로그':'naver_blog','인스타그램':'instagram','유튜브':'youtube'}
           catmap={'라이프스타일':'lifestyle','생활용품':'supplies','뷰티':'beauty','여행':'travel','패션':'fashion','피트니스':'fitness','음식/맛집':'food','육아':'parenting','반려동물':'pets','스포츠':'sports','IT/테크':'tech'}
           def number(t):
               m=re.match(r'([\d,.]+)\s*([KMB만천]?)',t,re.I)
               return round(float(m[1].replace(',',''))*{'k':1000,'m':1000000,'b':1000000000,'만':10000,'천':1000}.get(m[2].lower(),1)) if m else None
-          async def main():
-              global done
+          async def discover():
+              global done,stop
               queue=asyncio.Queue()
               for q in queries:queue.put_nowait(q)
               navlock=asyncio.Lock();last=[0]
@@ -48,74 +59,55 @@ jobs:
                       else:await r.continue_()
                   await context.route('**/*',route)
                   async def worker():
-                      global done
+                      global done,stop
                       page=await context.new_page()
-                      while not queue.empty():
+                      while not queue.empty() and not stop:
                           q=queue.get_nowait();url='https://inlink.to/discover?'+urllib.parse.urlencode(q)
                           try:
                               if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
                               async with navlock:
                                   await asyncio.sleep(max(0,1.2-(time.monotonic()-last[0])));last[0]=time.monotonic()
-                              resp=await page.goto(url,wait_until='domcontentloaded',timeout=40000)
-                              if resp and resp.status in [403,429]:raise RuntimeError('http_stop_'+str(resp.status))
-                              try:await page.locator('a[href^="/p/"]').first.wait_for(timeout=6000)
+                              resp=await page.goto(url,wait_until='domcontentloaded',timeout=30000)
+                              if resp and resp.status in [403,429]:stop=True;raise RuntimeError('http_stop_'+str(resp.status))
+                              try:await page.locator('a[href^="/p/"]').first.wait_for(timeout=4500)
                               except Exception:pass
-                              await page.wait_for_timeout(500)
-                              cards=await page.locator('[data-slot="card"]').evaluate_all("els=>els.filter(e=>e.querySelector('a[href^=\"/p/\"]')).slice(0,30).map(e=>({text:e.innerText,anchors:[...e.querySelectorAll('a[href^=\"/p/\"]')].map(a=>({href:a.getAttribute('href'),name:a.innerText})),categories:[...e.querySelectorAll('[data-slot=\"badge\"]')].map(b=>b.innerText),portfolio_count:e.querySelectorAll('[aria-label=\"포트폴리오 자세히 보기\"]').length}))")
+                              await page.wait_for_timeout(300)
+                              cards=await page.locator('[data-slot="card"]').evaluate_all("els=>els.filter(e=>e.querySelector('a[href^=\"/p/\"]')).slice(0,30).map(e=>({text:e.innerText,anchors:[...e.querySelectorAll('a[href^=\"/p/\"]')].map(a=>({href:a.getAttribute('href'),name:a.innerText})),categories:[...e.querySelectorAll('[data-slot=\"badge\"]')].map(b=>b.innerText)}))")
                               for card in cards:
                                   text=re.sub(r'\s+',' ',card['text']).strip()
-                                  if re.search(r'10대|초등학생|중학생|고등학생|키즈|어린이',text):continue
+                                  if re.search(r'10대|초등학생|중학생|고등학생|어린이|육아|베이비',text):continue
                                   aa=[a for a in card['anchors'] if a['name'].strip()]
                                   if not aa:continue
-                                  a=max(aa,key=lambda v:len(v['name']));mid=a['href'].rsplit('/',1)[-1];channels=[]
+                                  a=max(aa,key=lambda v:len(v['name']));mid=a['href'].rsplit('/',1)[-1]
+                                  if mid in known:continue
+                                  channels=[]
                                   for label,plat in labels.items():
                                       m=re.search(re.escape(label)+r'\s*([\d,.]+\s*[KMB만천]?)',text,re.I)
                                       if m:channels.append({'platform':plat,'metric':number(m[1])})
-                                  if not any(c['platform']==q['platform'] for c in channels):continue
+                                  if not any((c['platform']=='instagram' and 300<=c.get('metric',0)<=50000) or (c['platform']=='naver_blog' and 10<=c.get('metric',0)<=20000) for c in channels):continue
                                   cs=[catmap[c.strip()] for c in card['categories'] if c.strip() in catmap]
                                   if not cs:continue
-                                  rows[mid]={'name':a['name'].strip(),'member_number':int(mid),'source_url':'https://inlink.to/p/'+mid,'directory_url':url,'category_slugs':cs,'channels':channels,'adult_declared':bool(re.search(r'[2-9]0대',text)),'portfolio_count':card['portfolio_count'],'checked':'2026-09-22'}
+                                  rows[mid]={'name':a['name'].strip(),'member_number':int(mid),'source_url':'https://inlink.to/p/'+mid,'directory_url':url,'category_slugs':cs,'channels':channels,'adult_declared':bool(re.search(r'[2-9]0대',text)),'checked':'2026-09-22'}
                               done+=1
-                              if done%25==0:
-                                  (root/'supplemental_cards.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));print('SEARCH',done,'PROFILES',len(rows),flush=True)
-                          except Exception as e:
-                              errors.append({'url':url,'error':str(e)})
-                              if 'http_stop_' in str(e):
-                                  while not queue.empty():queue.get_nowait()
+                              if done%20==0:
+                                  (root/'additional_cards.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));print('SEARCH',done,'NEW',len(rows),flush=True)
+                          except Exception as e:errors.append({'url':url,'error':str(e)})
                           finally:queue.task_done()
                       await page.close()
                   await asyncio.gather(*(worker() for _ in range(3)));await browser.close()
-              (root/'supplemental_cards.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));(root/'search_errors.json').write_text(json.dumps(errors,ensure_ascii=False));print('FINAL',len(rows),'SEARCHES',done,'ERRORS',len(errors),flush=True)
-          asyncio.run(main())
-          PY
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: public-inlink-supplemental-cards
-          path: research-output/supplemental_cards.json
-          retention-days: 1
-          compression-level: 9
-      - name: Read newly discovered public profile links
-        run: |
-          python -u - <<'PY'
-          import urllib.request,urllib.robotparser,urllib.parse,urllib.error,json,pathlib,re,time,threading,concurrent.futures
-          from bs4 import BeautifulSoup
-          root=pathlib.Path('research-output');agent='PublicCreatorResearch/1.0 (public profile links; no outreach)';rp=urllib.robotparser.RobotFileParser()
-          with urllib.request.urlopen('https://inlink.to/robots.txt',timeout=20) as r:rp.parse(r.read().decode().splitlines())
-          known={x['member_number'] for x in json.loads(pathlib.Path('input/inlink_cards.json').read_text())}
-          rows=json.loads((root/'supplemental_cards.json').read_text());weights={'supplies':30,'lifestyle':28,'beauty':24,'travel':18,'fashion':16,'fitness':14,'food':4}
-          def eligible(x):
-              if not set(x['category_slugs'])&{'supplies','lifestyle','beauty','travel','fashion','fitness'}:return False
-              return any((c['platform']=='instagram' and 300<=c.get('metric',0)<=100000) or (c['platform']=='naver_blog' and 10<=c.get('metric',0)<=20000) for c in x['channels'])
-          selected=sorted([x for x in rows if x['member_number'] not in known and eligible(x)],key=lambda x:-(max([weights.get(c,0) for c in x['category_slugs']] or [0])+8*x['adult_declared']))[:1400]
-          print('NEW_SELECTED',len(selected),flush=True);lock=threading.Lock();last=[0];stop=threading.Event();emailre=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
-          def one(x):
+              (root/'additional_cards.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));(root/'search_errors.json').write_text(json.dumps(errors,ensure_ascii=False));print('SEARCH_DONE',done,'NEW',len(rows),flush=True)
+          asyncio.run(discover())
+          # Only read publicly linked profiles; never log in, message, or submit a proposal.
+          weights={'supplies':30,'lifestyle':29,'beauty':25,'fashion':20,'travel':18,'fitness':15,'food':3}
+          candidates=sorted(rows.values(),key=lambda x:-(max([weights.get(c,0) for c in x['category_slugs']] or [0])+8*x['adult_declared']))[:360]
+          lock=threading.Lock();last=[0];halt=threading.Event();emailre=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+          def detail(x):
               z=dict(x);z['detail_ok']=False;url=x['source_url']
               try:
-                  if stop.is_set():raise RuntimeError('host_stopped')
+                  if halt.is_set():raise RuntimeError('host_stopped')
                   if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
-                  with lock:time.sleep(max(0,.85-(time.monotonic()-last[0])));last[0]=time.monotonic()
-                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=25) as r:html=r.read(2500000).decode('utf-8','replace')
+                  with lock:time.sleep(max(0,1.0-(time.monotonic()-last[0])));last[0]=time.monotonic()
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=20) as r:html=r.read(2500000).decode('utf-8','replace')
                   s=BeautifulSoup(html,'html.parser');links=[];posts=[]
                   for a in s.find_all('a',href=True):
                       u=a['href'];parts=urllib.parse.urlsplit(u);host=parts.netloc.lower();pp=[v for v in parts.path.split('/') if v];plat=None
@@ -123,25 +115,25 @@ jobs:
                       if host in ['blog.naver.com','m.blog.naver.com'] and len(pp)==1 and re.fullmatch(r'[A-Za-z0-9_-]{2,50}',pp[0]):plat='naver_blog'
                       if host in ['youtube.com','www.youtube.com','m.youtube.com'] and pp and (pp[0].startswith('@') or (len(pp)==2 and pp[0] in ['channel','c','user'])):plat='youtube'
                       if plat:links.append({'platform':plat,'url':u,'label':a.parent.get_text(' ',strip=True)[:180]})
-                      if host in ['blog.naver.com','m.blog.naver.com'] and len(pp)>=2 and re.fullmatch(r'\d{9,}',pp[1]):posts.append({'title':a.get_text(' ',strip=True)[:160],'url':u})
+                      if host in ['blog.naver.com','m.blog.naver.com'] and len(pp)>=2 and re.fullmatch(r'\d{9,}',pp[1]):posts.append({'title':a.get_text(' ',strip=True)[:180],'url':u})
                   text=s.get_text(' ',strip=True);start=text.find('의 포트폴리오 | 인링크 inlink');intro=text[start+len('의 포트폴리오 | 인링크 inlink'):] if start>=0 else text;end=intro.find('SNS 채널');intro=intro[:end] if end>=0 else intro[:500]
-                  z['intro']=intro[:1200];z['social_urls']=list({a['url']:a for a in links}.values());z['portfolio_links']=posts[:8];z['emails']=sorted(set(emailre.findall(intro))) if re.search('문의|비즈니스|협업|광고|contact|business|협찬|mail|메일',intro,re.I) else [];z['detail_ok']=bool(links)
+                  z['intro']=intro[:1000];z['social_urls']=list({a['url']:a for a in links}.values());z['portfolio_links']=posts[:8];z['emails']=sorted(set(emailre.findall(intro))) if re.search('문의|비즈니스|협업|광고|contact|business|협찬|mail|메일',intro,re.I) else [];z['detail_ok']=bool(links)
               except urllib.error.HTTPError as e:
                   z['error']='HTTP_'+str(e.code)
-                  if e.code in (403,429):stop.set()
+                  if e.code in (403,429):halt.set()
               except Exception as e:z['error']=str(e)
               return z
           out=[]
           with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-              for i,z in enumerate(ex.map(one,selected)):
+              for i,z in enumerate(ex.map(detail,candidates)):
                   out.append(z)
-                  if i%100==0:(root/'supplemental_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('DETAILS',i,'OK',sum(x['detail_ok'] for x in out),flush=True)
-          (root/'supplemental_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('FINAL_DETAILS',len(out),'OK',sum(x['detail_ok'] for x in out),flush=True)
+                  if i%40==0:(root/'additional_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('DETAILS',len(out),flush=True)
+          (root/'additional_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('FINISHED',len(out),sum(x['detail_ok'] for x in out),flush=True)
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: public-inlink-supplemental-enriched
+          name: public-lifestyle-additional-profiles-0922
           path: research-output/
           retention-days: 1
           compression-level: 9
