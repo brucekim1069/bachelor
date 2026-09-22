@@ -5,66 +5,118 @@ on:
     paths: [.github/workflows/public-creator-sources.yml]
 permissions: {}
 jobs:
-  inspect-public-sources:
+  collect-public-directories:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
-      - name: Read public directory formats only
+      - name: Install HTML parser
+        run: python -m pip install --quiet beautifulsoup4
+      - name: Collect public listings without login or outreach
         run: |
           mkdir -p research-output
-          python - <<'PY'
-          import urllib.request, urllib.parse, urllib.error, urllib.robotparser, json, pathlib, time, re, concurrent.futures
-          root=pathlib.Path('research-output')
-          agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
-          robots={}; manifest=[]
-          def allowed(url):
-              u=urllib.parse.urlsplit(url);host=u.scheme+'://'+u.netloc
-              if host not in robots:
+          python -u - <<'PY'
+          import urllib.request,urllib.parse,urllib.error,urllib.robotparser,json,pathlib,time,re,threading,concurrent.futures,hashlib
+          from bs4 import BeautifulSoup
+          root=pathlib.Path('research-output');agent='PublicCreatorResearch/1.0 (public profiles only; no outreach)'
+          robots={}; locks={};last={};initlock=threading.Lock();manifest=[]
+          def setup(host):
+              with initlock:
+                  if host in robots:return
                   rp=urllib.robotparser.RobotFileParser()
                   try:
                       req=urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent})
                       with urllib.request.urlopen(req,timeout=15) as r:text=r.read(100000).decode('utf-8','replace')
                       rp.parse(text.splitlines())
-                  except urllib.error.HTTPError as e:
-                      rp.parse(['User-agent: *','Allow: /'] if e.code in (404,410) else ['User-agent: *','Disallow: /'])
+                  except urllib.error.HTTPError as e:rp.parse(['User-agent: *','Allow: /'] if e.code in (404,410) else ['User-agent: *','Disallow: /'])
                   except Exception:rp.parse(['User-agent: *','Disallow: /'])
-                  robots[host]=rp
-              return robots[host].can_fetch(agent,url)
-          def get(label,url,data=None):
-              record={'label':label,'url':url}
-              try:
-                  if not allowed(url):raise RuntimeError('robots_disallow')
-                  headers={'User-Agent':agent,'Accept':'text/html,application/json,text/plain,*/*'}
-                  if data is not None:headers['Content-Type']='application/x-www-form-urlencoded'
-                  req=urllib.request.Request(url,data=data,headers=headers)
-                  with urllib.request.urlopen(req,timeout=25) as r:text=r.read(4000000).decode('utf-8','replace')
-                  (root/label).write_text(text)
-                  record['bytes']=len(text);record['ok']=True
-                  return text
-              except Exception as e:record['error']=str(e);return ''
-              finally:manifest.append(record)
-          def site_js(label,url):
-              h=get(label+'.html',url)
-              scripts=re.findall(r'<script[^>]+src=[\"\x27]([^\"\x27]+)',h)
-              for i,s in enumerate(scripts):
-                  s=urllib.parse.urljoin(url,s)
-                  if urllib.parse.urlsplit(s).netloc!=urllib.parse.urlsplit(url).netloc:continue
-                  time.sleep(0.35);get(label+'-script-'+str(i)+'.js',s)
+                  robots[host]=rp;locks[host]=threading.Lock();last[host]=0
+          def get(url):
+              u=urllib.parse.urlsplit(url);host=u.scheme+'://'+u.netloc;setup(host)
+              rp=robots[host]
+              if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
+              with locks[host]:
+                  time.sleep(max(0,1.0-(time.monotonic()-last[host])));last[host]=time.monotonic()
+              req=urllib.request.Request(url,headers={'User-Agent':agent,'Accept':'text/html,application/json'})
+              with urllib.request.urlopen(req,timeout=30) as r:text=r.read(4500000).decode('utf-8','replace')
+              manifest.append({'url':url,'sha256':hashlib.sha256(text.encode()).hexdigest(),'checked':'2026-09-22'})
+              return text
+          def feed(html):
+              parts=[]
+              for sc in BeautifulSoup(html,'html.parser').find_all('script'):
+                  t=sc.get_text();m=re.fullmatch(r'self\.__next_f\.push\((.*)\)',t,re.S)
+                  if m:
+                      try:parts.extend(v for v in json.loads(m.group(1)) if isinstance(v,str))
+                      except Exception:pass
+              text=''.join(parts);i=text.find('"initialFeed":')
+              if i<0:return None
+              return json.JSONDecoder().raw_decode(text[i+len('"initialFeed":'):])[0]
+          def inlink():
+              rows={};cats=['lifestyle','supplies','beauty','travel','fashion','fitness','food']
+              cities=['Seoul','Gyeonggi','Incheon','Busan','Daegu','Daejeon','Gwangju','Ulsan','Sejong','Gangwon','ChungcheongBukdo','ChungcheongNamdo','JeollaBukdo','JeollaNamdo','GyeongsangBukdo','GyeongsangNamdo','Jeju']
+              queries=[{'category':c,'platform':p,'city':city} for city in cities for c in cats for p in ['instagram','naver_blog']]
+              def one(q):
+                  url='https://inlink.to/discover?'+urllib.parse.urlencode(q)
+                  try:
+                      f=feed(get(url))
+                      if not f:return []
+                      result=[]
+                      for x in f.get('rows',[])[:30]:
+                          if x.get('age_bucket')=='10s':continue
+                          if not x.get('member_number'):continue
+                          channels=[{'platform':c.get('platform'),'metric':c.get('follower_count')} for c in x.get('channels',[]) if c.get('platform') in ['instagram','naver_blog','youtube']]
+                          cc=[c.get('name_ko') for c in x.get('categories',[])];slugs=[c.get('slug') for c in x.get('categories',[])]
+                          if not set(slugs)&set(cats):continue
+                          if not any(c['platform']==q['platform'] for c in channels):continue
+                          entries=[{'title':(a.get('title') or '')[:220],'url':a.get('external_url'),'platform':a.get('platform')} for a in x.get('portfolio',[])[:8]]
+                          result.append({'name':x.get('username') or x.get('full_name'),'member_number':x['member_number'],'source_url':'https://inlink.to/p/'+str(x['member_number']),'directory_url':url,'categories':cc,'category_slugs':slugs,'channels':channels,'bio':(x.get('bio') or '')[:400],'tagline':(x.get('tagline') or '')[:150],'adult_declared':x.get('age_bucket') not in [None,'','10s'],'portfolio_count':x.get('portfolio_count'),'portfolio':entries})
+                      return result
+                  except Exception as e:
+                      print('inlink_error',q,str(e),flush=True);return []
+              with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+                  for i,batch in enumerate(ex.map(one,queries)):
+                      for x in batch:rows.setdefault(str(x['member_number']),x)
+                      if i%20==0:print('inlink',i,'queries',len(rows),'profiles',flush=True)
+                      if i%40==0:(root/'inlink_profiles.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False))
+              (root/'inlink_profiles.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));print('INLINK_FINAL',len(rows),flush=True)
+          def allsns():
+              rows={}
+              def category(pair):
+                  slug,scope=pair;out=[];url='https://allsnsrank.com/youtube/category/'+slug;offset=0;seen=set()
+                  for page in range(150):
+                      try:
+                          if page==0:html=get(url);hasmore=True
+                          else:
+                              api='https://allsnsrank.com/sns/rank_api.php?'+urllib.parse.urlencode({'sort':'subscribers','region':'KR','scope':'category:'+str(scope),'offset':offset})
+                              data=json.loads(get(api));html=data.get('html','');hasmore=data.get('hasMore',False)
+                          soup=BeautifulSoup(html,'html.parser');rr=soup.select('.pbrow')
+                          if not rr:break
+                          subs=[]
+                          for r in rr:
+                              a=r.select_one('a.pb-name');m=r.select_one('.pb-metric .s')
+                              if not a or not m:continue
+                              cid=a.get('href','').rsplit('/',1)[-1];sub=int(re.sub(r'\D','',m.get_text()) or 0);subs.append(sub)
+                              if cid in seen:continue
+                              seen.add(cid)
+                              if sub>100000 or sub<500:continue
+                              out.append({'name':a.get_text(' ',strip=True),'channel_id':cid,'subscribers':sub,'category':slug,'tags':[t.get_text(' ',strip=True) for t in r.select('.pb-tags a')],'videos':[{'title':v.get('data-title') or v.get('title'),'url':'https://www.youtube.com/watch?v='+v.get('data-vid','')} for v in r.select('.pb-v')[:2]],'source_url':'https://allsnsrank.com/youtube/channel/'+cid,'directory_url':url,'profile_url':'https://www.youtube.com/channel/'+cid,'checked':'2026-09-22'})
+                          offset+=len(rr)
+                          if page%20==0:print('allsns',slug,page,'kept',len(out),flush=True)
+                          if not hasmore or (subs and max(subs)<500):break
+                      except Exception as e:print('allsns_error',slug,page,str(e),flush=True);break
+                  return out
+              with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+                  for batch in ex.map(category,[('vlog',5),('beauty',4),('life',10)]):
+                      for r in batch:rows.setdefault(r['channel_id'],r)
+              (root/'youtube_profiles.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));print('YOUTUBE_FINAL',len(rows),flush=True)
           with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-              list(ex.map(lambda x:site_js(*x),[('inlink','https://inlink.to/discover'),('utoo','https://kr.utoo.be/rankings')]))
-          for mid in [300975,150844,24921]:
-              time.sleep(0.6);get('inlink-profile-'+str(mid)+'.html','https://inlink.to/p/'+str(mid))
-          for c in ['vlog','beauty','life','sports','food']:
-              time.sleep(0.6);get('allsns-'+c+'.html','https://allsnsrank.com/youtube/category/'+c)
-          get('allsns-vlog-offset30.json','https://allsnsrank.com/sns/rank_api.php?sort=subscribers&region=KR&scope=category%3A5&offset=30')
-          get('ndex-review.json','https://www.ndex.kr/home/get_blogs_by_directory',urllib.parse.urlencode({'directory':'상품리뷰','limit':20}).encode())
+              list(ex.map(lambda fn:fn(),[inlink,allsns]))
           (root/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
-          for r in manifest:print(r['label'],r.get('bytes',0),r.get('error',''))
           PY
-      - name: Save short-lived public-source files
+      - name: Save short-lived public directory data
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: public-creator-source-inspection-2
+          name: public-lifestyle-creator-directories
           path: research-output/
           retention-days: 1
           compression-level: 9
