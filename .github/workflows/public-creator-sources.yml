@@ -3,38 +3,126 @@ on:
   push:
     branches: [research/public-creator-sources-20260922]
     paths: [.github/workflows/public-creator-sources.yml]
-permissions: {}
+permissions:
+  actions: read
 jobs:
-  inspect-channel-format:
+  youtube-public-details:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 35
     steps:
-      - name: Read four public pages
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-lifestyle-creator-directories
+          run-id: 35678516924
+          github-token: ${{ github.token }}
+          path: input
+      - run: python -m pip install --quiet beautifulsoup4
+      - name: Read public channel introductions and recent public video metadata
         run: |
           mkdir -p research-output
-          python - <<'PY'
-          import urllib.request,urllib.robotparser,pathlib,time,json
-          root=pathlib.Path('research-output');host='https://allsnsrank.com';agent='PublicCreatorResearch/1.0 (public profile format check; no outreach)'
-          req=urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent})
-          with urllib.request.urlopen(req,timeout=20) as r:robots=r.read().decode()
-          rp=urllib.robotparser.RobotFileParser();rp.parse(robots.splitlines())
-          urls=['/youtube/channel/UChIFK3pewudHwqvZ2LNEa4g','/youtube/channel/UCGvmZahsB65iDzbsP_r_cZA','/youtube/channel/UC7giRJDyHuxffj4dfSHy_TQ','/youtube/find?cat=4&p=2&smax=100000&smin=500']
-          manifest=[]
-          for i,path in enumerate(urls):
-              url=host+path
-              if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):continue
+          python -u - <<'PY'
+          import urllib.request,urllib.error,urllib.robotparser,urllib.parse,json,pathlib,time,re,threading,concurrent.futures
+          from bs4 import BeautifulSoup
+          root=pathlib.Path('research-output');host='https://allsnsrank.com';agent='PublicCreatorResearch/1.0 (public business profiles; no outreach)'
+          rp=urllib.robotparser.RobotFileParser();req=urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent})
+          with urllib.request.urlopen(req,timeout=20) as r:rp.parse(r.read().decode().splitlines())
+          lock=threading.Lock();last=[0];stop=threading.Event()
+          bad=re.compile(r'초등학생|중학생|고등학생|초딩|중딩|고딩|키즈|어린이|유치원|교복|수능|육아|아기|아동|장난감|뽀로로|뉴스|주식|코인|정치|게임|마인크래프트|로블록스|원신|리니지|포켓몬|프라모델|낚시|농사|농장|도박|경마|경륜|묵상|찬양|설교|성인영상|Official|Entertainment|주식회사|공식\s*채널|성형외과|피부과의원|의원|치과|클리닉|병원|미용실|헤어샵|중고차|공인중개|부동산|교회|목사|사주|타로|보험|분양|대출|학원|쇼핑몰|렌탈|입시|매장|샌드박스|leferi|레페리|treasurehunter|트레져헌터',re.I)
+          positive=re.compile(r'생활|살림|자취|집순이|일상|브이로그|vlog|집밥|신혼|부부|여행|인테리어|메이크업|뷰티|화장품|스킨케어|올리브영|파우치|리뷰|꿀템|추천템|패션|코디|하울|청소|정리|루틴|퇴근|직장인|홈트|필라테스|요가|캠핑',re.I)
+          rows=json.loads(pathlib.Path('input/youtube_profiles.json').read_text())
+          def score(x):
+              name=x['name'];tags=' '.join(x.get('tags',[]));titles=' '.join((v.get('title') or '') for v in x.get('videos',[]));t=name+' '+tags+' '+titles
+              if bad.search(name+' '+tags) or re.search('초등학생|중학생|고등학생|초딩|중딩|고딩|교복|수능',titles):return -1
+              if len(re.findall('[가-힣]',t))<8 or not positive.search(t):return -1
+              s={'vlog':24,'beauty':22,'life':12}.get(x['category'],0)
+              s+=10*bool(re.search('살림|생활|자취|집순이|신혼|리뷰|꿀템|스킨케어|화장품|올리브영|홈트|루틴',t))
+              s+=5*bool(re.search('직장인|퇴근|출근|신혼|부부|집순이',t))
+              s+=4*(1000<=x['subscribers']<=50000)
+              s-=20*bool(re.search('임신|출산|임산부|수술|질환|암투병|육아',titles))
+              return s
+          rows=sorted([x for x in rows if score(x)>=20],key=lambda x:(-score(x),x['subscribers']))[:1900]
+          emailre=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+          def one(x):
+              url=x['source_url'];z=dict(x);z['detail_ok']=False;z['selection_score']=score(x)
               try:
+                  if stop.is_set():raise RuntimeError('host_stopped')
+                  if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
+                  with lock:time.sleep(max(0,.65-(time.monotonic()-last[0])));last[0]=time.monotonic()
                   req=urllib.request.Request(url,headers={'User-Agent':agent})
-                  with urllib.request.urlopen(req,timeout=30) as r:text=r.read(1500000).decode('utf-8','replace')
-                  (root/('channel-'+str(i)+'.html')).write_text(text);manifest.append({'url':url,'file':'channel-'+str(i)+'.html'})
-              except Exception as e:manifest.append({'url':url,'error':str(e)})
-              time.sleep(1)
-          (root/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2));print(manifest)
+                  with urllib.request.urlopen(req,timeout=25) as r:text=r.read(1800000).decode('utf-8','replace')
+                  s=BeautifulSoup(text,'html.parser');desc=s.select_one('.desc')
+                  if not s.select_one('h1'):raise RuntimeError('no_profile')
+                  if desc:
+                      for a in desc.select('[data-cfemail]'):
+                          try:
+                              b=bytes.fromhex(a['data-cfemail']);a.replace_with(''.join(chr(v^b[0]) for v in b[1:]))
+                          except Exception:pass
+                      intro=desc.get_text('\n',strip=True);z['intro']=intro[:3500]
+                      z['emails']=sorted(set(emailre.findall(intro))) if re.search('문의|비즈니스|비지니스|협업|광고|contact|business|협찬|mail|메일',intro,re.I) else []
+                      urls=re.findall(r'https?://[^\s<>\"\x27]+',intro)
+                      urls.extend(a.get('href','') for a in desc.find_all('a',href=True))
+                      z['social_urls']=list(dict.fromkeys(u.rstrip('.,;)') for u in urls if re.search('instagram.com|blog.naver.com|youtube.com|linktr.ee|litt.ly',u)))
+                  z['profile_type']=s.select_one('.htags').get_text(' ',strip=True) if s.select_one('.htags') else ''
+                  recent=[]
+                  for a in s.select('#sec-recent a.vid')[:8]:
+                      m=re.search(r'\d{4}-\d{2}-\d{2}',a.get('data-meta',''))
+                      recent.append({'title':a.get('data-title','')[:240],'date':m.group() if m else '', 'url':'https://www.youtube.com/watch?v='+a.get('data-vid','')})
+                  z['recent_videos']=recent;z['latest_public_date']=max([v['date'] for v in recent] or ['']);z['detail_ok']=True
+              except urllib.error.HTTPError as e:
+                  z['error']='HTTP_'+str(e.code)
+                  if e.code in (403,429):stop.set()
+              except Exception as e:z['error']=str(e)
+              return z
+          out=[]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+              for i,z in enumerate(ex.map(one,rows)):
+                  out.append(z)
+                  if i%100==0:
+                      (root/'youtube_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('youtube',i,'ok',sum(x['detail_ok'] for x in out),flush=True)
+          (root/'youtube_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('TOTAL',len(out),'OK',sum(x['detail_ok'] for x in out),flush=True)
           PY
-      - name: Save public page samples
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: public-channel-page-samples
+          name: public-youtube-details
           path: research-output/
+          retention-days: 1
+          compression-level: 9
+  public-directory-render-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - run: python -m pip install --quiet playwright beautifulsoup4
+      - run: python -m playwright install --with-deps chromium
+      - name: Render public directory without logging in
+        run: |
+          mkdir -p render-output
+          python -u - <<'PY'
+          import urllib.request,urllib.robotparser,pathlib,json,re,time
+          from playwright.sync_api import sync_playwright
+          root=pathlib.Path('render-output');agent='PublicCreatorResearch/1.0 (public directory check; no outreach)'
+          rp=urllib.robotparser.RobotFileParser()
+          with urllib.request.urlopen('https://inlink.to/robots.txt',timeout=20) as r:rp.parse(r.read().decode().splitlines())
+          urls=['https://inlink.to/discover?category=lifestyle&platform=instagram&city=Seoul','https://inlink.to/discover?category=beauty&platform=instagram','https://inlink.to/discover?category=supplies&platform=naver_blog']
+          with sync_playwright() as p:
+              browser=p.chromium.launch();page=browser.new_page(viewport={'width':1400,'height':1000})
+              page.route('**/*',lambda route: route.abort() if route.request.resource_type in ['image','font','media'] else route.continue_())
+              for i,url in enumerate(urls):
+                  if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):continue
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=30) as r:html=r.read().decode('utf-8','replace')
+                  (root/('raw-'+str(i)+'.html')).write_text(html)
+                  page.goto(url,wait_until='domcontentloaded',timeout=45000)
+                  try:page.locator('a[href^="/p/"]').first.wait_for(timeout=25000)
+                  except Exception:pass
+                  page.wait_for_timeout(2500)
+                  (root/('render-'+str(i)+'.html')).write_text(page.content())
+                  cards=page.locator('[data-slot="card"]').all_text_contents();print('PAGE',i,'cards',len(cards),'sample',str(cards[:2])[:1000],flush=True)
+              browser.close()
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-inlink-render-samples
+          path: render-output/
           retention-days: 1
           compression-level: 9
