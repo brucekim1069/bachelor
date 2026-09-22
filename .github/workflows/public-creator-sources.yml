@@ -1,4 +1,4 @@
-name: Public creator source research
+name: Public creator contact research
 on:
   push:
     branches: [research/public-creator-sources-20260922]
@@ -6,134 +6,97 @@ on:
 permissions:
   actions: read
 jobs:
-  additional-public-lifestyle-profiles:
+  public-contact-research:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 38
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: public-inlink-visible-cards
-          run-id: 35679701735
+          name: public-lifestyle-creator-directories
+          run-id: 35678516924
           github-token: ${{ github.token }}
-          path: input1
+          path: input-pool
       - uses: actions/download-artifact@v4
         with:
-          name: public-inlink-supplemental-cards
-          run-id: 35680361599
+          name: public-youtube-details
+          run-id: 35679437296
           github-token: ${{ github.token }}
-          path: input2
-      - run: python -m pip install --quiet playwright beautifulsoup4
-      - run: python -m playwright install --with-deps chromium
-      - name: Find additional public lifestyle creators
+          path: input-old
+      - run: python -m pip install --quiet beautifulsoup4
+      - name: Read additional public creator profiles; do not send any messages
         run: |
           mkdir -p research-output
           python -u - <<'PY'
-          import asyncio,json,pathlib,re,urllib.request,urllib.robotparser,urllib.parse,urllib.error,time,threading,concurrent.futures
-          from playwright.async_api import async_playwright
+          import urllib.request,urllib.error,urllib.robotparser,urllib.parse,json,pathlib,time,re,threading,concurrent.futures,hashlib,datetime
           from bs4 import BeautifulSoup
-          root=pathlib.Path('research-output');agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
-          known=set()
-          for folder in ['input1','input2']:
-              for f in pathlib.Path(folder).glob('*.json'):
-                  data=json.loads(f.read_text())
-                  if isinstance(data,list):known.update(str(x['member_number']) for x in data if isinstance(x,dict) and 'member_number' in x)
+          root=pathlib.Path('research-output');host='https://allsnsrank.com';agent='PublicCreatorResearch/1.0 (public business profiles; no outreach)'
           rp=urllib.robotparser.RobotFileParser()
-          with urllib.request.urlopen('https://inlink.to/robots.txt',timeout=20) as r:rp.parse(r.read().decode().splitlines())
-          terms=['신혼','자취','살림','일상','뷰티','화장품','직장인','라이프스타일','셀프','소품','소통','정성','꼼꼼','기록','패션','여행']
-          queries=[{'field':'bio','q':t,'platform':p,'city':city} for t in terms for p in ['naver_blog','instagram'] for city in ['Seoul','Gyeonggi','Busan','Incheon']]
-          rows={};errors=[];done=0;stop=False
-          labels={'네이버 블로그':'naver_blog','인스타그램':'instagram','유튜브':'youtube'}
-          catmap={'라이프스타일':'lifestyle','생활용품':'supplies','뷰티':'beauty','여행':'travel','패션':'fashion','피트니스':'fitness','음식/맛집':'food','육아':'parenting','반려동물':'pets','스포츠':'sports','IT/테크':'tech'}
-          def number(t):
-              m=re.match(r'([\d,.]+)\s*([KMB만천]?)',t,re.I)
-              return round(float(m[1].replace(',',''))*{'k':1000,'m':1000000,'b':1000000000,'만':10000,'천':1000}.get(m[2].lower(),1)) if m else None
-          async def discover():
-              global done,stop
-              queue=asyncio.Queue()
-              for q in queries:queue.put_nowait(q)
-              navlock=asyncio.Lock();last=[0]
-              async with async_playwright() as p:
-                  browser=await p.chromium.launch();context=await browser.new_context(viewport={'width':1400,'height':1000})
-                  async def route(r):
-                      if r.request.resource_type in ['image','media','font']:await r.abort()
-                      else:await r.continue_()
-                  await context.route('**/*',route)
-                  async def worker():
-                      global done,stop
-                      page=await context.new_page()
-                      while not queue.empty() and not stop:
-                          q=queue.get_nowait();url='https://inlink.to/discover?'+urllib.parse.urlencode(q)
-                          try:
-                              if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
-                              async with navlock:
-                                  await asyncio.sleep(max(0,1.2-(time.monotonic()-last[0])));last[0]=time.monotonic()
-                              resp=await page.goto(url,wait_until='domcontentloaded',timeout=30000)
-                              if resp and resp.status in [403,429]:stop=True;raise RuntimeError('http_stop_'+str(resp.status))
-                              try:await page.locator('a[href^="/p/"]').first.wait_for(timeout=4500)
-                              except Exception:pass
-                              await page.wait_for_timeout(300)
-                              cards=await page.locator('[data-slot="card"]').evaluate_all("els=>els.filter(e=>e.querySelector('a[href^=\"/p/\"]')).slice(0,30).map(e=>({text:e.innerText,anchors:[...e.querySelectorAll('a[href^=\"/p/\"]')].map(a=>({href:a.getAttribute('href'),name:a.innerText})),categories:[...e.querySelectorAll('[data-slot=\"badge\"]')].map(b=>b.innerText)}))")
-                              for card in cards:
-                                  text=re.sub(r'\s+',' ',card['text']).strip()
-                                  if re.search(r'10대|초등학생|중학생|고등학생|어린이|육아|베이비',text):continue
-                                  aa=[a for a in card['anchors'] if a['name'].strip()]
-                                  if not aa:continue
-                                  a=max(aa,key=lambda v:len(v['name']));mid=a['href'].rsplit('/',1)[-1]
-                                  if mid in known:continue
-                                  channels=[]
-                                  for label,plat in labels.items():
-                                      m=re.search(re.escape(label)+r'\s*([\d,.]+\s*[KMB만천]?)',text,re.I)
-                                      if m:channels.append({'platform':plat,'metric':number(m[1])})
-                                  if not any((c['platform']=='instagram' and 300<=c.get('metric',0)<=50000) or (c['platform']=='naver_blog' and 10<=c.get('metric',0)<=20000) for c in channels):continue
-                                  cs=[catmap[c.strip()] for c in card['categories'] if c.strip() in catmap]
-                                  if not cs:continue
-                                  rows[mid]={'name':a['name'].strip(),'member_number':int(mid),'source_url':'https://inlink.to/p/'+mid,'directory_url':url,'category_slugs':cs,'channels':channels,'adult_declared':bool(re.search(r'[2-9]0대',text)),'checked':'2026-09-22'}
-                              done+=1
-                              if done%20==0:
-                                  (root/'additional_cards.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));print('SEARCH',done,'NEW',len(rows),flush=True)
-                          except Exception as e:errors.append({'url':url,'error':str(e)})
-                          finally:queue.task_done()
-                      await page.close()
-                  await asyncio.gather(*(worker() for _ in range(3)));await browser.close()
-              (root/'additional_cards.json').write_text(json.dumps(list(rows.values()),ensure_ascii=False));(root/'search_errors.json').write_text(json.dumps(errors,ensure_ascii=False));print('SEARCH_DONE',done,'NEW',len(rows),flush=True)
-          asyncio.run(discover())
-          # Only read publicly linked profiles; never log in, message, or submit a proposal.
-          weights={'supplies':30,'lifestyle':29,'beauty':25,'fashion':20,'travel':18,'fitness':15,'food':3}
-          candidates=sorted(rows.values(),key=lambda x:-(max([weights.get(c,0) for c in x['category_slugs']] or [0])+8*x['adult_declared']))[:360]
-          lock=threading.Lock();last=[0];halt=threading.Event();emailre=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
-          def detail(x):
-              z=dict(x);z['detail_ok']=False;url=x['source_url']
+          with urllib.request.urlopen(urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent}),timeout=20) as r:rt=r.read().decode();rp.parse(rt.splitlines());(root/'robots.txt').write_text(rt)
+          interval=max(.6,rp.crawl_delay(agent) or 0,rp.crawl_delay('*') or 0)
+          lock=threading.Lock();last=[0];stop=threading.Event()
+          minor=re.compile(r'초등학생|중학생|고등학생|초딩|중딩|고딩|키즈|어린이|유치원|교복|수능|중학교|고등학교|중1|중2|중3|고1|고2|고3|육아|아기|아동|장난감|뽀로로',re.I)
+          unrelated=re.compile(r'뉴스|주식|코인|정치|게임|마인크래프트|로블록스|원신|리니지|포켓몬|프라모델|낚시|농사|농장|도박|경마|경륜|묵상|찬양|설교|성인영상|Entertainment|주식회사|공식\s*채널|성형외과|피부과의원|의원|치과|클리닉|병원|미용실|헤어샵|중고차|공인중개|부동산|교회|목사|사주|타로|보험|분양|대출|학원|쇼핑몰|렌탈|입시|작명|제품\s*문의|수강\s*문의|시공\s*문의|외벽|코킹|철거|설비',re.I)
+          agency=re.compile(r'샌드박스|sandbox|레페리|leferi|트레져헌터|treasurehunter|다이아\s*티비|dia\s*tv|cj\.net|shortt\.kr|숏뜨|ag-ent|카론|charon|순이엔티|soonet',re.I)
+          positive=re.compile(r'생활|살림|자취|집순이|일상|브이로그|vlog|집밥|신혼|부부|여행|인테리어|메이크업|뷰티|화장품|스킨케어|올리브영|파우치|리뷰|꿀템|추천템|패션|코디|하울|청소|정리|루틴|퇴근|직장인|홈트|필라테스|요가|캠핑',re.I)
+          contact=re.compile(r'문의|비즈니스|비지니스|협업|광고|contact|business|협찬|e-?mail|메일|📩|📨|📧|💌',re.I)
+          nocol=re.compile(r'광고\s*[Xx×❌]|협찬\s*[Xx×❌]|공구\s*[Xx×❌]|공구\s*진행.*안|협업.*않|광고.*않|협찬.*않|협업.*받지',re.I)
+          emailre=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+          pool=json.loads(pathlib.Path('input-pool/youtube_profiles.json').read_text());old=json.loads(pathlib.Path('input-old/youtube_enriched.json').read_text());known={x['channel_id'] for x in old};used={e.lower() for x in old for e in emailre.findall(x.get('intro',''))}
+          def score(x):
+              name=x['name'];tags=' '.join(x.get('tags',[]));titles=' '.join(v.get('title') or '' for v in x.get('videos',[]));t=name+' '+tags+' '+titles
+              if minor.search(t) or unrelated.search(name+' '+tags) or agency.search(t):return -1
+              if len(re.findall('[가-힣]',t))<8 or not positive.search(t):return -1
+              s={'vlog':24,'beauty':22,'life':12}.get(x['category'],0)+4*(1000<=x['subscribers']<=50000)
+              s+=10*bool(re.search('살림|생활|자취|집순이|신혼|리뷰|꿀템|스킨케어|화장품|올리브영|홈트|루틴',t))
+              s+=5*bool(re.search('직장인|퇴근|출근|신혼|부부|집순이',t));s-=20*bool(re.search('임신|출산|임산부|수술|질환|암투병|육아',titles))
+              return s
+          candidates=sorted([x for x in pool if x['channel_id'] not in known and score(x)>=20],key=lambda x:(-score(x),x['subscribers']))[:2900]
+          def one(x):
+              z=dict(x);url=x['source_url'];z['detail_ok']=False;z['selection_score']=score(x)
               try:
-                  if halt.is_set():raise RuntimeError('host_stopped')
+                  if stop.is_set():raise RuntimeError('host_stopped')
                   if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
-                  with lock:time.sleep(max(0,1.0-(time.monotonic()-last[0])));last[0]=time.monotonic()
-                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=20) as r:html=r.read(2500000).decode('utf-8','replace')
-                  s=BeautifulSoup(html,'html.parser');links=[];posts=[]
-                  for a in s.find_all('a',href=True):
-                      u=a['href'];parts=urllib.parse.urlsplit(u);host=parts.netloc.lower();pp=[v for v in parts.path.split('/') if v];plat=None
-                      if host in ['instagram.com','www.instagram.com'] and len(pp)==1 and pp[0] not in ['p','reel','reels','stories','explore','accounts']:plat='instagram'
-                      if host in ['blog.naver.com','m.blog.naver.com'] and len(pp)==1 and re.fullmatch(r'[A-Za-z0-9_-]{2,50}',pp[0]):plat='naver_blog'
-                      if host in ['youtube.com','www.youtube.com','m.youtube.com'] and pp and (pp[0].startswith('@') or (len(pp)==2 and pp[0] in ['channel','c','user'])):plat='youtube'
-                      if plat:links.append({'platform':plat,'url':u,'label':a.parent.get_text(' ',strip=True)[:180]})
-                      if host in ['blog.naver.com','m.blog.naver.com'] and len(pp)>=2 and re.fullmatch(r'\d{9,}',pp[1]):posts.append({'title':a.get_text(' ',strip=True)[:180],'url':u})
-                  text=s.get_text(' ',strip=True);start=text.find('의 포트폴리오 | 인링크 inlink');intro=text[start+len('의 포트폴리오 | 인링크 inlink'):] if start>=0 else text;end=intro.find('SNS 채널');intro=intro[:end] if end>=0 else intro[:500]
-                  z['intro']=intro[:1000];z['social_urls']=list({a['url']:a for a in links}.values());z['portfolio_links']=posts[:8];z['emails']=sorted(set(emailre.findall(intro))) if re.search('문의|비즈니스|협업|광고|contact|business|협찬|mail|메일',intro,re.I) else [];z['detail_ok']=bool(links)
+                  with lock:time.sleep(max(0,interval-(time.monotonic()-last[0])));last[0]=time.monotonic()
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=25) as r:html=r.read(1800000).decode('utf-8','replace')
+                  z['fetched_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();z['source_sha256']=hashlib.sha256(html.encode()).hexdigest()
+                  s=BeautifulSoup(html,'html.parser');desc=s.select_one('.desc')
+                  if not s.select_one('h1'):raise RuntimeError('no_profile')
+                  z['current_page_name']=s.select_one('h1').get_text(' ',strip=True)
+                  if desc:
+                      for a in desc.select('[data-cfemail]'):
+                          try:
+                              b=bytes.fromhex(a['data-cfemail']);a.replace_with(''.join(chr(v^b[0]) for v in b[1:]))
+                          except Exception:pass
+                      intro=desc.get_text('\n',strip=True);z['intro']=intro[:5000];z['emails']=sorted(set(emailre.findall(intro))) if contact.search(intro) else []
+                      urls=re.findall(r'https?://[^\s<>\"\x27]+',intro);urls.extend(a.get('href','') for a in desc.find_all('a',href=True));z['social_urls']=list(dict.fromkeys(u.rstrip('.,;)') for u in urls if re.search('instagram.com|blog.naver.com|youtube.com|linktr.ee|litt.ly',u)))
+                  z['profile_type']=s.select_one('.htags').get_text(' ',strip=True) if s.select_one('.htags') else ''
+                  recent=[]
+                  for a in s.select('#sec-recent a.vid')[:8]:
+                      m=re.search(r'\d{4}-\d{2}-\d{2}',a.get('data-meta',''));recent.append({'title':a.get('data-title','')[:240],'date':m.group() if m else '','url':'https://www.youtube.com/watch?v='+a.get('data-vid','')})
+                  z['recent_videos']=recent;z['latest_public_date']=max([v['date'] for v in recent] or ['']);z['detail_ok']=True
+                  intro=z.get('intro','');t=x['name']+' '+intro+' '+' '.join(v['title'] for v in recent[:6]);es=z.get('emails',[])
+                  z['preliminary_eligible']=bool(es and '2026-03-26'<=z['latest_public_date']<='2026-09-22' and not minor.search(t) and not agency.search(t) and not unrelated.search(x['name']+' '+intro) and not nocol.search(intro) and positive.search(t) and not any(e.startswith(('-','.')) or '..' in e or re.search(r'@(?:gmai\.com|gmali\.com|gmail\.con|example\.)',e,re.I) for e in es))
               except urllib.error.HTTPError as e:
                   z['error']='HTTP_'+str(e.code)
-                  if e.code in (403,429):halt.set()
+                  if e.code in (403,429):stop.set()
               except Exception as e:z['error']=str(e)
               return z
-          out=[]
-          with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-              for i,z in enumerate(ex.map(detail,candidates)):
-                  out.append(z)
-                  if i%40==0:(root/'additional_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('DETAILS',len(out),flush=True)
-          (root/'additional_enriched.json').write_text(json.dumps(out,ensure_ascii=False));print('FINISHED',len(out),sum(x['detail_ok'] for x in out),flush=True)
+          out=[];good=[];done=0
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+              for start in range(0,len(candidates),100):
+                  batch=list(ex.map(one,candidates[start:start+100]));out.extend(batch)
+                  for x in batch:
+                      es={e.lower() for e in x.get('emails',[])}
+                      if x.get('preliminary_eligible') and not es&used:good.append(x);used.update(es)
+                  (root/'additional_youtube_details.json').write_text(json.dumps(out,ensure_ascii=False));(root/'preliminary_new_contacts.json').write_text(json.dumps(good,ensure_ascii=False));print('READ',len(out),'ELIGIBLE_NEW_CONTACTS',len(good),'STOPPED',stop.is_set(),flush=True)
+                  if stop.is_set() or len(good)>=440:break
+          summary={'read_profiles':len(out),'preliminary_eligible_new_contacts':len(good),'stopped_for_host_error':stop.is_set(),'email_sent':0,'dm_sent':0,'rate_interval_seconds':interval,'queried_date':'2026-09-22','contact_validation':'Public profile text only; no SMTP delivery test or outreach.'}
+          (root/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));print(json.dumps(summary),flush=True)
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: public-lifestyle-additional-profiles-0922
+          name: public-additional-contact-research-0922
           path: research-output/
           retention-days: 1
           compression-level: 9
