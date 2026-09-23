@@ -1,0 +1,115 @@
+name: Public lifestyle subcategory contacts
+on:
+  push:
+    branches: [research/public-creator-sources-20260922]
+    paths: [.github/workflows/public-lifestyle-subcategory-contacts.yml]
+permissions:
+  actions: read
+jobs:
+  new-public-subcategory-profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 48
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-contact-expansion-2000-youtube
+          run-id: 35719955762
+          github-token: ${{ github.token }}
+          path: previous
+      - run: python -m pip install --quiet beautifulsoup4
+      - name: Read public subcategory listings and public business descriptions only
+        run: |
+          mkdir -p research-output
+          python -u - <<'PY'
+          import urllib.request,urllib.error,urllib.robotparser,urllib.parse,json,pathlib,time,re,threading,concurrent.futures,hashlib,datetime,unicodedata
+          from bs4 import BeautifulSoup
+          root=pathlib.Path('research-output');host='https://allsnsrank.com';agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
+          rp=urllib.robotparser.RobotFileParser()
+          with urllib.request.urlopen(urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent}),timeout=20) as r:robots=r.read().decode();rp.parse(robots.splitlines());(root/'robots.txt').write_text(robots)
+          delay=max(.75,rp.crawl_delay(agent) or 0,rp.crawl_delay('*') or 0);lock=threading.Lock();last=[0.0];halt=threading.Event()
+          previous=json.loads(pathlib.Path('previous/expanded_youtube_pool.json').read_text());known={x['channel_id'] for x in previous};pool={};manifest=[]
+          minor=re.compile(r'초등|중학생|고등학생|초딩|중딩|고딩|키즈|어린이|유치원|교복|수능|육아|아기|아동|유아|장난감|뽀로로|부모님.{0,10}관리|아이와|아이랑|삼남매|삼형제|신생아|출산|임산부|태교|젠더리빌|\b(?:kids?|baby|children|teenager)\b|(?:0[8-9]|1[0-9])년생',re.I)
+          bad=re.compile(r'뉴스|주식|코인|정치|게임|마인크래프트|로블록스|리니지|포켓몬|프라모델|낚시|농장|도박|묵상|찬양|설교|주식회사|공식\s*(?:채널|유튜브)|의원|치과|클리닉|병원|미용실|공인중개|부동산|교회|사주|타로|보험|분양|대출|학원|쇼핑몰|렌탈|시공\s*문의|제품\s*문의|구매\s*문의|설비|법무사|재테크|에이전시|방송인|아나운서|치어리더|제작사|여행사|반려견|반려묘|강아지|고양이|프로선수|공식\s*브랜드',re.I)
+          agency=re.compile(r'샌드박스|sandbox|레페리|leferi|트레져헌터|treasurehunter|다이아\s*티비|dia\s*tv|cj\.net|shortt\.kr|숏뜨|ag-ent|카론|charon|순이엔티|soonet|mcn@|doohocorp|ypco\.kr|collabasia|icecreative|wishcompany|gysent|waffent|tagby\.io|playtown\.biz|abomedia|nobent|entertainment',re.I)
+          positive=re.compile(r'생활|살림|자취|집순이|일상|브이로그|vlog|집밥|신혼|부부|여행|인테리어|메이크업|뷰티|화장품|스킨케어|올리브영|파우치|리뷰|꿀템|추천템|패션|코디|하울|청소|정리|루틴|퇴근|직장인|홈트|필라테스|요가|캠핑|요리|레시피|베이킹|헬스|운동|다이어트|자기관리',re.I)
+          contact=re.compile(r'문의|비즈니스|비지니스|협업|광고|contact|business|협찬|e-?mail|메일|📩|📨|📧|💌|✉|📮',re.I);er=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+          decline=re.compile(r'(?:광고|협찬|공구|협업)\s*[Xx×❌]|(?:협업|광고|협찬).{0,14}(?:않|안\s*받|받지|불가|거절|못\s*받)|no\s*(?:ads|collab|sponsor)',re.I)
+          def get(url):
+              if halt.is_set():raise RuntimeError('host_stopped')
+              if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
+              with lock:time.sleep(max(0,delay-(time.monotonic()-last[0])));last[0]=time.monotonic()
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=25) as r:return r.read(2500000).decode('utf-8','replace')
+              except urllib.error.HTTPError as e:
+                  if e.code in [401,403,429]:halt.set()
+                  raise
+          def listing(slug):
+              rows=[];base=host+'/youtube/category/'+slug;seen=set();offset=0
+              try:
+                  text=get(base);m=re.search(r'var\s+SCOPE\s*=\s*"([^"]+)"',text)
+                  if not m:return []
+                  scope=m[1]
+                  for page in range(120):
+                      url=base if page==0 else host+'/sns/rank_api.php?'+urllib.parse.urlencode({'sort':'subscribers','region':'KR','scope':scope,'offset':offset})
+                      if page:
+                          d=json.loads(get(url));text=d.get('html','');hasmore=d.get('hasMore',False)
+                      else:hasmore=True
+                      soup=BeautifulSoup(text,'html.parser');rr=soup.select('.pbrow');subs=[]
+                      if not rr:break
+                      for r in rr:
+                          a=r.select_one('a.pb-name');m=r.select_one('.pb-metric .s')
+                          if not a or not m:continue
+                          cid=a.get('href','').rsplit('/',1)[-1];sub=int(re.sub(r'\D','',m.get_text()) or 0);subs.append(sub)
+                          if cid in known or cid in seen or not re.fullmatch(r'UC[A-Za-z0-9_-]{22}',cid) or not 500<=sub<=100000:continue
+                          seen.add(cid);name=a.get_text(' ',strip=True);tags=[v.get_text(' ',strip=True) for v in r.select('.pb-tags a')];vids=[{'title':v.get('data-title') or v.get('title') or '', 'url':'https://www.youtube.com/watch?v='+v.get('data-vid','')} for v in r.select('.pb-v')[:2]];t=name+' '+' '.join(tags)+' '+' '.join(v['title'] for v in vids)
+                          if minor.search(t) or agency.search(t) or bad.search(name+' '+' '.join(tags)) or len(re.findall('[가-힣]',t))<4:continue
+                          rows.append({'name':name,'channel_id':cid,'subscribers':sub,'category':slug,'tags':tags,'videos':vids,'source_url':host+'/youtube/channel/'+cid,'profile_url':'https://www.youtube.com/channel/'+cid,'directory_url':url,'checked':'2026-09-23'})
+                      offset+=len(rr);manifest.append({'url':url,'sha256':hashlib.sha256(text.encode()).hexdigest()})
+                      if not hasmore or (subs and max(subs)<500):break
+              except Exception as e:print('LIST_ERROR',slug,str(e),flush=True)
+              print('CATEGORY',slug,'NEW',len(rows),flush=True);return rows
+          cats=['life-home','life-travel','life-camping','food-cooking','food-baking','sports-homeworkout']
+          with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+              for batch in ex.map(listing,cats):
+                  for x in batch:pool.setdefault(x['channel_id'],x)
+          (root/'subcategory_new_pool.json').write_text(json.dumps(list(pool.values()),ensure_ascii=False));(root/'listing_manifest.json').write_text(json.dumps(manifest,ensure_ascii=False));print('NEW_POOL',len(pool),flush=True)
+          def score(x):
+              t=x['name']+' '+' '.join(x['tags'])+' '+' '.join(v['title'] for v in x['videos'])
+              return 30*bool(re.search('일상|브이로그|vlog|집밥|자취|신혼|부부|직장인|루틴|살림',t,re.I))+15*(x['category'] in ['life-home','life-travel','life-camping'])+4*(1000<=x['subscribers']<=50000)
+          targets=sorted(pool.values(),key=lambda x:(-score(x),x['subscribers']))[:2000]
+          def one(x):
+              z=dict(x);z['detail_ok']=False
+              try:
+                  html=get(x['source_url']);z['source_sha256']=hashlib.sha256(html.encode()).hexdigest();z['fetched_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();s=BeautifulSoup(html,'html.parser');h=s.select_one('h1');d=s.select_one('.desc')
+                  if not h:raise RuntimeError('no_public_profile')
+                  z['current_page_name']=h.get_text(' ',strip=True);intro=''
+                  if d:
+                      for a in d.select('[data-cfemail]'):
+                          try:b=bytes.fromhex(a['data-cfemail']);a.replace_with(''.join(chr(v^b[0]) for v in b[1:]))
+                          except Exception:pass
+                      intro=d.get_text('\n',strip=True);z['intro']=intro[:6000];links=re.findall(r'https?://[^\s<>\"\x27]+',intro)+[a['href'] for a in d.select('a[href]')];z['social_urls']=list(dict.fromkeys(u.rstrip('.,;)') for u in links if re.search(r'instagram\.com|blog\.naver\.com|youtube\.com|linktr\.ee|litt\.ly',u)))
+                  z['emails']=sorted(set(er.findall(intro))) if contact.search(unicodedata.normalize('NFKC',intro)) else [];vids=[]
+                  for a in s.select('#sec-recent a.vid')[:8]:
+                      m=re.search(r'\d{4}-\d{2}-\d{2}',a.get('data-meta',''));vids.append({'title':a.get('data-title','')[:240],'date':m.group() if m else '','url':'https://www.youtube.com/watch?v='+a.get('data-vid','')})
+                  z['recent_videos']=vids;z['latest_public_date']=max([v['date'] for v in vids] or ['']);z['detail_ok']=True;t=unicodedata.normalize('NFKC',x['name']+' '+intro+' '+' '.join(v['title'] for v in vids[:6]))
+                  z['preliminary_eligible']=bool(z['emails'] and '2026-03-27'<=z['latest_public_date']<='2026-09-23' and not minor.search(t) and not bad.search(x['name']+' '+intro) and not agency.search(t) and not decline.search(intro) and positive.search(t))
+              except Exception as e:z['error']=str(e)
+              return z
+          out=[];good=[];used=set()
+          with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+              for i in range(0,len(targets),125):
+                  batch=list(ex.map(one,targets[i:i+125]));out.extend(batch)
+                  for x in batch:
+                      es={e.lower() for e in x.get('emails',[])}
+                      if x.get('preliminary_eligible') and not es&used:good.append(x);used.update(es)
+                  (root/'subcategory_details.json').write_text(json.dumps(out,ensure_ascii=False));(root/'subcategory_contact_candidates.json').write_text(json.dumps(good,ensure_ascii=False));print('DETAILS',len(out),'PRELIMINARY',len(good),flush=True)
+                  if halt.is_set() or len(good)>=550:break
+          (root/'summary.json').write_text(json.dumps({'pool':len(pool),'read':len(out),'preliminary':len(good),'checked_date':'2026-09-23','email_sent':0,'dm_sent':0,'host_stopped':halt.is_set()},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-lifestyle-subcategory-contacts-0923
+          path: research-output/
+          retention-days: 2
+          compression-level: 9
