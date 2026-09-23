@@ -1,0 +1,100 @@
+name: Public lifestyle blog remainder research
+on:
+  push:
+    branches: [research/public-creator-sources-20260922]
+    paths: [.github/workflows/public-blog-research-remainder.yml]
+permissions:
+  actions: read
+jobs:
+  public-blog-remainder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-contact-expansion-3000-blogs
+          run-id: 35829987124
+          github-token: ${{ github.token }}
+          path: recent
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-contact-expansion-2000-blogs
+          run-id: 35719955762
+          github-token: ${{ github.token }}
+          path: previous
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-blog-contact-research-0922
+          run-id: 35704563569
+          github-token: ${{ github.token }}
+          path: original
+      - run: python -m pip install --quiet beautifulsoup4
+      - name: Read remaining public introductions with source provenance
+        run: |
+          mkdir -p research-output
+          python -u - <<'PY'
+          import urllib.request,urllib.error,urllib.robotparser,urllib.parse,json,pathlib,time,re,threading,concurrent.futures,hashlib,datetime,unicodedata,csv,io
+          from bs4 import BeautifulSoup
+          root=pathlib.Path('research-output');host='https://www.ndex.kr';agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
+          rp=urllib.robotparser.RobotFileParser()
+          with urllib.request.urlopen(urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent}),timeout=20) as r:rt=r.read().decode();rp.parse(rt.splitlines());(root/'robots.txt').write_text(rt)
+          known=set()
+          for f in ['recent/blog_details_3000.json','previous/new_blog_details.json','original/public_blog_details.json']:
+              known.update(x['blog_id'].lower() for x in json.loads(pathlib.Path(f).read_text()))
+          bad=re.compile(r'초등|중학생|고등학생|키즈|어린이|유치원|육아|아기|아동|유아|주식회사|공인중개|부동산|의원|병원|정치|게임|투자|대출|보험|분양|작명|사주|타로|학원|시공|공식\s*블로그|센터\s*블로그|제품\s*문의|쇼핑몰|업체\s*블로그|성형|반려견|반려묘',re.I)
+          positive=re.compile(r'일상|생활|살림|자취|뷰티|화장품|패션|미용|스킨케어|신혼|부부|데이트|여행|인테리어|소품|내돈내산|리뷰|직장인|집순이|홈트|요가|필라테스|캠핑|카페|맛집|요리|레시피',re.I)
+          contact=re.compile(r'문의|협찬|협업|광고|제안|메일|e-?mail|contact|business|✉|💌|📧|📩|📨|📮',re.I);er=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+          decline=re.compile(r'(?:광고|협찬|공구|협업)\s*[Xx×❌]|(?:협업|광고|협찬).{0,14}(?:않|안\s*받|받지|불가|거절|못\s*받)|공구\s*안',re.I)
+          hints={};sources=[]
+          for src in json.loads(pathlib.Path('recent/discovery_sources.json').read_text()):
+              url=src.get('url','')
+              if not url.startswith('https://raw.githubusercontent.com/') or not url.endswith('.csv'):continue
+              try:
+                  rr=urllib.robotparser.RobotFileParser();rr.set_url('https://raw.githubusercontent.com/robots.txt');rr.read()
+                  if not rr.can_fetch(agent,url):continue
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=25) as r:text=r.read(3500000).decode('utf-8-sig','replace')
+                  sources.append({'url':url,'sha256':hashlib.sha256(text.encode()).hexdigest()})
+                  for row in csv.DictReader(io.StringIO(text)):
+                      link=row.get('link','');title=row.get('title','');m=re.fullmatch(r'https?://(?:m\.)?blog\.naver\.com/([A-Za-z0-9_-]+)/([0-9]{9,})/?',link)
+                      if not m or m[1].lower() in known or bad.search(title) or not positive.search(title):continue
+                      key=m[1].lower();score=20*bool(re.search('뷰티|화장품|패션|미용|스킨케어|살림|자취|생활|신혼|부부|소품',title))+10*bool(re.search('내돈내산|일상|직장인|기록|데이트',title))
+                      z={'blog_id':m[1],'profile_url':'https://blog.naver.com/'+m[1],'discovery_url':url,'discovery_post_url':link,'discovery_title':title[:220],'discovery_date':row.get('date',''),'score':score}
+                      if key not in hints or score>hints[key]['score']:hints[key]=z
+              except Exception as e:sources.append({'url':url,'error':str(e)})
+          targets=sorted(hints.values(),key=lambda x:(-x['score'],x['blog_id']))[:1300];print('REMAINING_DISCOVERED',len(hints),'REQUESTS',len(targets),flush=True);(root/'discovery_sources.json').write_text(json.dumps(sources,ensure_ascii=False))
+          lock=threading.Lock();last=[0.0];stop=threading.Event();delay=max(.6,rp.crawl_delay(agent) or 0,rp.crawl_delay('*') or 0)
+          def one(x):
+              z=dict(x);z['source_url']=host+'/data/'+urllib.parse.quote(x['blog_id']);z['detail_ok']=False
+              try:
+                  u=z['source_url']
+                  if stop.is_set():raise RuntimeError('host_stopped')
+                  if not rp.can_fetch(agent,u) or not rp.can_fetch('ChatGPT-User',u):raise RuntimeError('robots_disallow')
+                  with lock:time.sleep(max(0,delay-(time.monotonic()-last[0])));last[0]=time.monotonic()
+                  with urllib.request.urlopen(urllib.request.Request(u,headers={'User-Agent':agent}),timeout=20) as r:html=r.read(2500000).decode('utf-8','replace')
+                  z['source_sha256']=hashlib.sha256(html.encode()).hexdigest();z['fetched_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();s=BeautifulSoup(html,'html.parser');z['page_title']=s.title.get_text(' ',strip=True) if s.title else ''
+                  for a in s.select('script,style,nav,footer'):a.decompose()
+                  text=s.get_text('\n',strip=True);i=text.find('블로그 소개')
+                  if i<0:raise RuntimeError('no_public_intro')
+                  intro=text[i+len('블로그 소개'):].split('참여도 지표 분석')[0].strip();z['intro']=intro[:3000];z['emails']=sorted(set(er.findall(intro))) if contact.search(unicodedata.normalize('NFKC',intro)) else []
+                  m=re.search(r'일\s*평균\s*방문자\s*[:：]?\s*([\d,]+)',text);z['daily_visitors']=int(m[1].replace(',','')) if m else None
+                  j=text.find('누락 포스팅 및 지수 조회');z['post_excerpt']=text[j:min(i,j+2400)] if 0<=j<i else '';z['checked']='2026-09-23';z['detail_ok']=True
+                  z['preliminary_eligible']=bool(z['emails'] and not bad.search(z['page_title']+' '+intro) and not decline.search(intro) and positive.search(z['page_title']+' '+intro+' '+x.get('discovery_title','')))
+              except urllib.error.HTTPError as e:
+                  z['error']='HTTP_'+str(e.code)
+                  if e.code in [401,403,429]:stop.set()
+              except Exception as e:z['error']=str(e)
+              return z
+          out=[]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+              for i in range(0,len(targets),125):
+                  out.extend(ex.map(one,targets[i:i+125]));(root/'blog_remainder_details.json').write_text(json.dumps(out,ensure_ascii=False));print('READ',len(out),'PUBLIC_EMAIL',sum(bool(x.get('emails')) for x in out),flush=True)
+                  if stop.is_set():break
+          (root/'summary.json').write_text(json.dumps({'read':len(out),'preliminary':sum(bool(x.get('preliminary_eligible')) for x in out),'email_sent':0,'dm_sent':0,'host_stopped':stop.is_set(),'checked_date':'2026-09-23'},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-blog-remainder-contacts-0923
+          path: research-output/
+          retention-days: 2
+          compression-level: 9
