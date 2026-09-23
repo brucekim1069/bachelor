@@ -1,0 +1,204 @@
+name: Public lifestyle contacts expansion 3000
+on:
+  push:
+    branches: [research/public-creator-sources-20260922]
+    paths: [.github/workflows/public-contact-expansion-3000.yml]
+permissions:
+  actions: read
+jobs:
+  youtube-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 38
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-contact-expansion-2000-youtube
+          run-id: 35719955762
+          github-token: ${{ github.token }}
+          path: prior-expansion
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: public-additional-contact-research-0922
+          run-id: 35703194842
+          github-token: ${{ github.token }}
+          path: prior-extra
+      - run: python -m pip install --quiet beautifulsoup4
+      - name: Read public creator descriptions without login or outreach
+        run: |
+          mkdir -p youtube-output
+          python -u - <<'PY'
+          import urllib.request,urllib.error,urllib.robotparser,urllib.parse,json,pathlib,time,re,threading,concurrent.futures,hashlib,datetime,unicodedata
+          from bs4 import BeautifulSoup
+          outdir=pathlib.Path('youtube-output');host='https://allsnsrank.com';agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)'
+          rp=urllib.robotparser.RobotFileParser()
+          with urllib.request.urlopen(urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent}),timeout=20) as r:robots=r.read().decode();rp.parse(robots.splitlines());(outdir/'robots.txt').write_text(robots)
+          delay=max(.6,rp.crawl_delay(agent) or 0,rp.crawl_delay('*') or 0);lock=threading.Lock();last=[0.0];halt=threading.Event()
+          pool=json.loads(pathlib.Path('prior-expansion/expanded_youtube_pool.json').read_text());old=json.loads(pathlib.Path('prior-expansion/new_youtube_details.json').read_text())
+          f=pathlib.Path('prior-extra/additional_youtube_details.json')
+          if f.exists():old+=json.loads(f.read_text())
+          known={x['channel_id'] for x in old}
+          minor=re.compile(r'초등|중학생|고등학생|초딩|중딩|고딩|키즈|어린이|유치원|교복|수능|중학교|고등학교|중[123]|고[123]|육아|아기|아동|장난감|뽀로로|부모님.{0,8}관리|아빠가.{0,8}관리|엄마가.{0,8}관리|\b(?:kids?|baby|children|teenager)\b|(?:0[8-9]|1[0-9])년생|1[0-7]살|1[0-7]세|잼민',re.I)
+          bad=re.compile(r'뉴스|주식|코인|정치|게임|마인크래프트|로블록스|원신|리니지|포켓몬|낚시|농사|농장|도박|경마|경륜|묵상|찬양|설교|성인영상|Entertainment|주식회사|공식\s*(?:채널|유튜브)|성형외과|의원|치과|클리닉|병원|미용실|헤어샵|중고차|공인중개|부동산|교회|목사|사주|타로|보험|분양|대출|학원|쇼핑몰|렌탈|입시|작명|시공\s*문의|수강\s*문의|제품\s*문의|구매\s*문의|외벽|코킹|철거|설비|법률사무소|법무사|재테크|에이전시|방송인|아나운서|현직\s*배우',re.I)
+          agency=re.compile(r'샌드박스|sandbox|레페리|leferi|트레져헌터|treasurehunter|다이아\s*티비|dia\s*tv|cj\.net|shortt\.kr|숏뜨|ag-ent|카론|charon|순이엔티|soonet|mcn@|doohocorp|ypco\.kr|collabasia|icecreative|wishcompany|gysent|waffent|tagby\.io|playtown\.biz|abomedia|nobent|purpleent',re.I)
+          goodtopic=re.compile(r'생활|살림|자취|집순이|일상|브이로그|vlog|집밥|신혼|부부|여행|인테리어|메이크업|뷰티|화장품|스킨케어|올리브영|파우치|리뷰|꿀템|추천템|패션|코디|하울|청소|정리|루틴|퇴근|직장인|홈트|필라테스|요가|캠핑',re.I)
+          contact=re.compile(r'문의|비즈니스|비지니스|협업|광고|contact|business|협찬|e-?mail|메일|📩|📨|📧|💌|✉|📮',re.I)
+          decline=re.compile(r'(?:광고|협찬|공구|협업)\s*[Xx×❌]|공구\s*진행.*안|(?:협업|광고|협찬).{0,14}(?:않|안\s*받|받지|불가|거절|못\s*받)|no\s*(?:ads|collab|sponsor)',re.I)
+          er=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+          def score(x):
+              t=unicodedata.normalize('NFKC',x['name']+' '+' '.join(x.get('tags',[]))+' '+' '.join(v.get('title') or '' for v in x.get('videos',[])))
+              if minor.search(t) or agency.search(t) or bad.search(x['name']+' '+' '.join(x.get('tags',[]))) or not goodtopic.search(t) or len(re.findall('[가-힣]',t))<4:return -1
+              return {'vlog':30,'beauty':28,'life':16}.get(x['category'],0)+8*bool(re.search('살림|생활|자취|신혼|스킨케어|리뷰|꿀템|직장인',t))+4*(1000<=x['subscribers']<=50000)
+          targets=sorted([x for x in pool if x['channel_id'] not in known and score(x)>=0],key=lambda x:(-score(x),-x['subscribers']))[:2700]
+          def one(x):
+              z=dict(x);z.update(detail_ok=False,checked='2026-09-23');url=x['source_url']
+              try:
+                  if halt.is_set():raise RuntimeError('host_stopped')
+                  if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
+                  with lock:time.sleep(max(0,delay-(time.monotonic()-last[0])));last[0]=time.monotonic()
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=25) as r:html=r.read(2200000).decode('utf-8','replace')
+                  z['source_sha256']=hashlib.sha256(html.encode()).hexdigest();z['fetched_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();s=BeautifulSoup(html,'html.parser');h=s.select_one('h1');d=s.select_one('.desc')
+                  if not h:raise RuntimeError('no_profile')
+                  z['current_page_name']=h.get_text(' ',strip=True);intro=''
+                  if d:
+                      for a in d.select('[data-cfemail]'):
+                          try:b=bytes.fromhex(a['data-cfemail']);a.replace_with(''.join(chr(v^b[0]) for v in b[1:]))
+                          except Exception:pass
+                      intro=d.get_text('\n',strip=True);z['intro']=intro[:6000]
+                      links=re.findall(r'https?://[^\s<>\"\x27]+',intro)+[a['href'] for a in d.select('a[href]')];z['social_urls']=list(dict.fromkeys(u.rstrip('.,;)') for u in links if re.search(r'instagram\.com|blog\.naver\.com|youtube\.com|linktr\.ee|litt\.ly',u)))
+                  z['emails']=sorted(set(er.findall(intro))) if contact.search(unicodedata.normalize('NFKC',intro)) else []
+                  vids=[]
+                  for a in s.select('#sec-recent a.vid')[:8]:
+                      m=re.search(r'\d{4}-\d{2}-\d{2}',a.get('data-meta',''));vids.append({'title':a.get('data-title','')[:240],'date':m.group() if m else '','url':'https://www.youtube.com/watch?v='+a.get('data-vid','')})
+                  z['recent_videos']=vids;z['latest_public_date']=max([v['date'] for v in vids] or ['']);z['detail_ok']=True
+                  t=unicodedata.normalize('NFKC',x['name']+' '+intro+' '+' '.join(v['title'] for v in vids[:6]));reasons=[]
+                  if not z['emails']:reasons.append('no_public_email')
+                  if not '2026-03-27'<=z['latest_public_date']<='2026-09-23':reasons.append('activity_unconfirmed')
+                  if minor.search(t):reasons.append('minor_or_child_indicator')
+                  if bad.search(x['name']+' '+intro):reasons.append('business_or_unrelated')
+                  if agency.search(t):reasons.append('agency_indicator')
+                  if decline.search(intro):reasons.append('declined')
+                  if not goodtopic.search(t):reasons.append('topic_unconfirmed')
+                  z['review_reasons']=reasons;z['preliminary_eligible']=not reasons
+              except urllib.error.HTTPError as e:
+                  z['error']='HTTP_'+str(e.code)
+                  if e.code in [401,403,429]:halt.set()
+              except Exception as e:z['error']=str(e)
+              return z
+          out=[];accepted=[];seen=set()
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+              for i in range(0,len(targets),150):
+                  batch=list(ex.map(one,targets[i:i+150]));out.extend(batch)
+                  for x in batch:
+                      es={e.lower() for e in x.get('emails',[])}
+                      if x.get('preliminary_eligible') and not es&seen:accepted.append(x);seen.update(es)
+                  (outdir/'youtube_details_3000.json').write_text(json.dumps(out,ensure_ascii=False));(outdir/'youtube_contact_candidates_3000.json').write_text(json.dumps(accepted,ensure_ascii=False));print('READ',len(out),'PUBLIC_EMAIL',sum(bool(x.get('emails')) for x in out),'PRELIMINARY',len(accepted),flush=True)
+                  if halt.is_set() or len(accepted)>=720:break
+          (outdir/'summary.json').write_text(json.dumps({'read':len(out),'preliminary':len(accepted),'email_sent':0,'dm_sent':0,'host_stopped':halt.is_set(),'checked_date':'2026-09-23'},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-contact-expansion-3000-youtube
+          path: youtube-output/
+          retention-days: 2
+          compression-level: 9
+  blog-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-contact-expansion-2000-blogs
+          run-id: 35719955762
+          github-token: ${{ github.token }}
+          path: prior-blogs
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: public-blog-contact-research-0922
+          run-id: 35704563569
+          github-token: ${{ github.token }}
+          path: old-blogs
+      - run: python -m pip install --quiet beautifulsoup4
+      - name: Find publicly linked lifestyle blogs and read published business introductions
+        run: |
+          mkdir -p blog-output
+          python -u - <<'PY'
+          import urllib.request,urllib.error,urllib.robotparser,urllib.parse,json,pathlib,time,re,threading,concurrent.futures,hashlib,datetime,unicodedata,csv,io,xml.etree.ElementTree as ET
+          from bs4 import BeautifulSoup
+          root=pathlib.Path('blog-output');host='https://www.ndex.kr';agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)';rp=urllib.robotparser.RobotFileParser()
+          with urllib.request.urlopen(urllib.request.Request(host+'/robots.txt',headers={'User-Agent':agent}),timeout=20) as r:robots=r.read().decode();rp.parse(robots.splitlines());(root/'robots.txt').write_text(robots)
+          delay=max(.6,rp.crawl_delay(agent) or 0,rp.crawl_delay('*') or 0);lock=threading.Lock();last=[0.0];halt=threading.Event()
+          old=json.loads(pathlib.Path('prior-blogs/new_blog_details.json').read_text());p=pathlib.Path('old-blogs/public_blog_details.json')
+          if p.exists():old+=json.loads(p.read_text())
+          known={x['blog_id'].lower() for x in old};hints={};source_log=[]
+          bad=re.compile(r'초등|중학생|고등학생|키즈|어린이|유치원|육아|아기|아동|유아|주식회사|공인중개|부동산|의원|병원|정치|게임|투자|대출|보험|분양|작명|사주|타로|학원|시공|공식\s*블로그|센터\s*블로그|제품\s*문의|쇼핑몰|업체\s*블로그',re.I)
+          positive=re.compile(r'일상|생활|살림|자취|뷰티|화장품|패션|미용|스킨케어|신혼|부부|데이트|여행|인테리어|소품|내돈내산|리뷰|직장인|집순이|홈트|요가|필라테스|캠핑|카페|맛집',re.I)
+          contact=re.compile(r'문의|협찬|협업|광고|제안|메일|e-?mail|contact|business|✉|💌|📧|📩|📨|📮',re.I);er=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+          decline=re.compile(r'(?:광고|협찬|공구|협업)\s*[Xx×❌]|(?:협업|광고|협찬).{0,14}(?:않|안\s*받|받지|불가|거절|못\s*받)',re.I)
+          def get(url,limit=3500000):
+              if halt.is_set():raise RuntimeError('host_stopped')
+              if not rp.can_fetch(agent,url) or not rp.can_fetch('ChatGPT-User',url):raise RuntimeError('robots_disallow')
+              with lock:time.sleep(max(0,delay-(time.monotonic()-last[0])));last[0]=time.monotonic()
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=20) as r:return r.read(limit).decode('utf-8','replace')
+              except urllib.error.HTTPError as e:
+                  if e.code in [401,403,429]:halt.set()
+                  raise
+          # Public historical URL indices are discovery hints only, never proof of current activity.
+          for area in ['성수동','연남동']:
+              path='shinh09/BigData_Project_Gentrification/main/data_html/'+area+'/links_'+area+'_명소_2025.csv';url='https://raw.githubusercontent.com/'+urllib.parse.quote(path,safe='/')
+              try:
+                  rr=urllib.robotparser.RobotFileParser();rr.set_url('https://raw.githubusercontent.com/robots.txt');rr.read()
+                  if not rr.can_fetch(agent,url):continue
+                  with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=25) as r:text=r.read(3500000).decode('utf-8-sig','replace')
+                  source_log.append({'url':url,'sha256':hashlib.sha256(text.encode()).hexdigest(),'type':'public_url_discovery_hints'})
+                  for row in csv.DictReader(io.StringIO(text)):
+                      link=row.get('link','');title=row.get('title','');m=re.fullmatch(r'https?://(?:m\.)?blog\.naver\.com/([A-Za-z0-9_-]+)/([0-9]{9,})/?',link)
+                      if not m or m[1].lower() in known or bad.search(title) or not positive.search(title):continue
+                      key=m[1].lower();score=20*bool(re.search('뷰티|화장품|패션|미용|스킨케어|살림|자취|생활|신혼|부부|소품',title))+10*bool(re.search('내돈내산|일상|직장인|기록|데이트',title))+5*bool(re.search('여행|인테리어|캠핑',title))
+                      z={'blog_id':m[1],'profile_url':'https://blog.naver.com/'+m[1],'discovery_url':url,'discovery_post_url':link,'discovery_title':title[:220],'discovery_date':row.get('date',''),'discovery_score':score}
+                      if key not in hints or (score,z['discovery_date'])>(hints[key]['discovery_score'],hints[key]['discovery_date']):hints[key]=z
+              except Exception as e:source_log.append({'url':url,'error':str(e)})
+          print('DISCOVERY_HINTS',len(hints),flush=True)
+          # Supplement with the site's published sitemap, without authentication or write requests.
+          try:
+              xml=get(host+'/sitemap.xml',6000000);locs=[e.text for e in ET.fromstring(xml).iter() if e.tag.endswith('loc') and e.text]
+              for u in locs:
+                  m=re.fullmatch(r'https://www\.ndex\.kr/data/([A-Za-z0-9_-]+)/?',u)
+                  if m and m[1].lower() not in known:hints.setdefault(m[1].lower(),{'blog_id':m[1],'profile_url':'https://blog.naver.com/'+m[1],'discovery_url':host+'/sitemap.xml','discovery_title':'','discovery_date':'','discovery_score':0})
+              (root/'sitemap_sample.xml').write_text(xml[:300000])
+          except Exception as e:source_log.append({'url':host+'/sitemap.xml','error':str(e)})
+          targets=sorted(hints.values(),key=lambda x:(-x['discovery_score'],x['discovery_date']),reverse=False)[:3000];(root/'discovery_hints.json').write_text(json.dumps(targets,ensure_ascii=False));(root/'discovery_sources.json').write_text(json.dumps(source_log,ensure_ascii=False,indent=2))
+          def one(x):
+              z=dict(x);z['source_url']=host+'/data/'+urllib.parse.quote(x['blog_id']);z['detail_ok']=False
+              try:
+                  html=get(z['source_url']);z['source_sha256']=hashlib.sha256(html.encode()).hexdigest();z['fetched_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();s=BeautifulSoup(html,'html.parser');z['page_title']=s.title.get_text(' ',strip=True) if s.title else ''
+                  for a in s.select('script,style,nav,footer'):a.decompose()
+                  text=s.get_text('\n',strip=True);i=text.find('블로그 소개')
+                  if i<0:raise RuntimeError('no_public_intro')
+                  intro=text[i+len('블로그 소개'):].split('참여도 지표 분석')[0].strip();z['intro']=intro[:3000];z['emails']=sorted(set(er.findall(intro))) if contact.search(unicodedata.normalize('NFKC',intro)) else []
+                  m=re.search(r'일\s*평균\s*방문자\s*[:：]?\s*([\d,]+)',text);z['daily_visitors']=int(m[1].replace(',','')) if m else None
+                  j=text.find('누락 포스팅 및 지수 조회');z['post_excerpt']=text[j:min(i,j+2400)] if 0<=j<i else '';z['detail_ok']=True;z['checked']='2026-09-23'
+                  z['preliminary_eligible']=bool(z['emails'] and not bad.search(z['page_title']+' '+intro) and not decline.search(intro) and positive.search(z['page_title']+' '+intro+' '+x.get('discovery_title','')))
+              except Exception as e:z['error']=str(e)
+              return z
+          out=[];good=[];used=set()
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+              for i in range(0,len(targets),150):
+                  batch=list(ex.map(one,targets[i:i+150]));out.extend(batch)
+                  for x in batch:
+                      es={e.lower() for e in x.get('emails',[])}
+                      if x.get('preliminary_eligible') and not es&used:good.append(x);used.update(es)
+                  (root/'blog_details_3000.json').write_text(json.dumps(out,ensure_ascii=False));(root/'blog_contact_candidates_3000.json').write_text(json.dumps(good,ensure_ascii=False));print('READ',len(out),'PUBLIC_INTROS',sum(x['detail_ok'] for x in out),'PRELIMINARY',len(good),flush=True)
+                  if halt.is_set() or len(good)>=1100:break
+          (root/'summary.json').write_text(json.dumps({'read':len(out),'preliminary':len(good),'discovery_count':len(hints),'email_sent':0,'dm_sent':0,'host_stopped':halt.is_set(),'checked_date':'2026-09-23'},indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-contact-expansion-3000-blogs
+          path: blog-output/
+          retention-days: 2
+          compression-level: 9
