@@ -1,0 +1,108 @@
+name: Public lifestyle contact quality research
+on:
+  push:
+    branches: [research/public-creator-sources-20260922]
+    paths: [.github/workflows/public-contact-quality-0924.yml]
+permissions:
+  actions: read
+jobs:
+  read-public-professional-profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-contact-expansion-3000-blogs
+          run-id: 35829987124
+          github-token: ${{ github.token }}
+          path: known1
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-blog-remainder-contacts-0923
+          run-id: 35832859611
+          github-token: ${{ github.token }}
+          path: known2
+      - uses: actions/download-artifact@v4
+        with:
+          name: public-hannam-contact-quality-supplement
+          run-id: 35869942370
+          github-token: ${{ github.token }}
+          path: known3
+      - run: python -m pip install --quiet beautifulsoup4
+      - name: Read public introductions and keep source evidence; do not send messages
+        run: |
+          mkdir -p output
+          python -u - <<'PY'
+          import csv,io,json,pathlib,re,time,threading,concurrent.futures,urllib.request,urllib.error,urllib.parse,urllib.robotparser,hashlib,datetime,unicodedata
+          from bs4 import BeautifulSoup
+          root=pathlib.Path('output');agent='PublicCreatorResearch/1.0 (public professional profiles; no outreach)';today=datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+          seen=set()
+          for folder in ['known1','known2','known3']:
+              for f in pathlib.Path(folder).glob('*.json'):
+                  data=json.loads(f.read_text())
+                  if isinstance(data,list):seen.update(str(x.get('blog_id','')).lower() for x in data if isinstance(x,dict) and x.get('detail_ok') is not None)
+          def raw(url,limit=2500000):
+              with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':agent}),timeout=20) as r:return r.read(limit).decode('utf-8-sig','replace')
+          found={};sources=[]
+          good=re.compile(r'여행|맛집|카페|데이트|뷰티|화장품|스킨케어|리뷰|내돈내산|집꾸미기|신혼|직장인|일상|패션|쇼핑|인테리어|자취|팝업|전시|호텔|휴가|숙소')
+          bad=re.compile(r'아기|육아|어린이|유치원|초등|주식|부동산|분양|임대|매매|병원|의원|학원|대출|작명|운세|사주|중학교|고등학교')
+          paths=[]
+          for month in range(11,0,-1):paths.append(f'data_html/한남동/2025/links/links_한남동_명소_2025{month:02d}.csv')
+          treeurl='https://api.github.com/repos/shinh09/BigData_Project_Gentrification/git/trees/fce2cdc5aa16083b3064fa8e1eea57243ae6cfd2?recursive=1'
+          try:
+              tree=json.loads(raw(treeurl));paths.extend('data_html/신사동/2025/'+x['path'] for x in tree.get('tree',[]) if x.get('type')=='blob' and '/links_' in '/'+x.get('path','') and x['path'].endswith('.csv'))
+          except Exception as e:print('TREE_ERROR',type(e).__name__,flush=True)
+          for path in paths:
+              url='https://raw.githubusercontent.com/shinh09/BigData_Project_Gentrification/main/'+urllib.parse.quote(path)
+              try:
+                  text=raw(url);sources.append({'url':url,'sha256':hashlib.sha256(text.encode()).hexdigest()})
+                  for x in csv.DictReader(io.StringIO(text)):
+                      u=x.get('link','');title=x.get('title','');m=re.match(r'https?://(?:m\.)?blog\.naver\.com/([A-Za-z0-9_-]+)/([0-9]{9,})',u)
+                      if not m or not good.search(title) or bad.search(title) or m[1].lower() in seen:continue
+                      bid=m[1];score=15*bool(re.search('리뷰|내돈내산|직장인|신혼|화장품|뷰티|패션|자취|일상',title))+8*bool(re.search('데이트|쇼핑|인테리어|팝업',title))+3*bool(re.search('여행|카페|맛집',title))
+                      z={'blog_id':bid,'profile_url':'https://blog.naver.com/'+bid,'discovery_title':title,'discovery_post_url':u,'discovery_date':x.get('date',''),'discovery_url':url,'discovery_score':score}
+                      if bid.lower() not in found or score>found[bid.lower()]['discovery_score']:found[bid.lower()]=z
+                  time.sleep(.15)
+              except Exception as e:print('DISCOVERY_ERROR',path,type(e).__name__,flush=True)
+          (root/'discovery_manifest.json').write_text(json.dumps(sources,ensure_ascii=False));print('DISCOVERY',len(found),flush=True)
+          host='https://www.ndex.kr';rp=urllib.robotparser.RobotFileParser()
+          try:
+              rt=raw(host+'/robots.txt');rp.parse(rt.splitlines());(root/'robots.txt').write_text(rt)
+          except urllib.error.HTTPError as e:rp.parse(['User-agent: *','Allow: /'] if e.code in (404,410) else ['User-agent: *','Disallow: /'])
+          lock=threading.Lock();last=[0];halt=threading.Event();delay=max(.8,rp.crawl_delay(agent) or 0,rp.crawl_delay('*') or 0)
+          er=re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}');cr=re.compile(r'협업|문의|비즈니스|제안|협찬|광고|mail|contact|business|✉|💌|📧|📩|📨|📮',re.I)
+          reject=re.compile(r'육아|아기|아이와|아이랑|어린이|키즈|초등|중학생|고등학생|주식회사|공식\s*블로그|공인중개|부동산|병원|의원|마케팅\s*대행|구매\s*문의|예약\s*문의|시공\s*문의|재테크|대출|쇼핑몰\s*운영|샌드박스|레페리|sandbox|leferi|컨설팅',re.I)
+          decline=re.compile(r'(?:광고|협찬|공구|협업)\s*[Xx×❌]|(?:협업|광고|협찬).{0,12}(?:않|안\s*받|받지|불가|거절)|no\s*(?:ads|collab)',re.I)
+          def one(x):
+              z=dict(x);u=host+'/data/'+urllib.parse.quote(x['blog_id']);z.update(source_url=u,checked=today,detail_ok=False)
+              try:
+                  if halt.is_set():raise RuntimeError('host_stopped')
+                  if not rp.can_fetch(agent,u) or not rp.can_fetch('ChatGPT-User',u):raise RuntimeError('robots_disallow')
+                  with lock:time.sleep(max(0,delay-(time.monotonic()-last[0])));last[0]=time.monotonic()
+                  html=raw(u);z['source_sha256']=hashlib.sha256(html.encode()).hexdigest();z['fetched_at']=datetime.datetime.now(datetime.timezone.utc).isoformat();s=BeautifulSoup(html,'html.parser')
+                  for e in s.select('script,style,nav,footer'):e.decompose()
+                  text=s.get_text('\n',strip=True);i=text.find('블로그 소개')
+                  if i<0:raise RuntimeError('no_public_intro')
+                  intro=text[i+len('블로그 소개'):].split('참여도 지표 분석')[0].strip();z['intro']=intro[:3000];z['page_title']=s.title.get_text(' ',strip=True) if s.title else '';z['name']=z['page_title'].split(' 블로그 분석')[0];z['emails']=sorted(set(er.findall(intro))) if cr.search(unicodedata.normalize('NFKC',intro)) else []
+                  m=re.search(r'일\s*평균\s*방문자\s*[:：]?\s*([\d,]+)',text);z['daily_visitors']=int(m[1].replace(',','')) if m else None
+                  j=text.find('누락 포스팅 및 지수 조회');z['post_excerpt']=text[j:min(i,j+1800)] if 0<=j<i else '';z['detail_ok']=True
+                  z['preliminary_eligible']=bool(z['emails'] and not reject.search(z['name']+' '+intro) and not decline.search(intro) and z['daily_visitors'] is not None and 5<=z['daily_visitors']<=10000)
+              except urllib.error.HTTPError as e:
+                  z['error']='HTTP_'+str(e.code)
+                  if e.code in (401,403,429):halt.set()
+              except Exception as e:z['error']=str(e)
+              return z
+          targets=sorted(found.values(),key=lambda x:(-x['discovery_score'],x['blog_id']))[:1600];out=[]
+          with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+              for i in range(0,len(targets),100):
+                  out.extend(ex.map(one,targets[i:i+100]));(root/'quality_blog_details_0924.json').write_text(json.dumps(out,ensure_ascii=False));n=sum(bool(x.get('preliminary_eligible')) for x in out);print('READ',len(out),'PUBLIC_EMAILS',sum(bool(x.get('emails')) for x in out),'PRELIMINARY',n,flush=True)
+                  if halt.is_set() or n>=220:break
+          summary={'checked_date':today,'discovery_count':len(found),'profiles_read':len(out),'preliminary_contact_count':sum(bool(x.get('preliminary_eligible')) for x in out),'email_sent':0,'dm_sent':0,'host_stopped':halt.is_set(),'rate_interval_seconds':delay};(root/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2));print(json.dumps(summary),flush=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-lifestyle-contact-quality-0924
+          path: output/
+          retention-days: 7
+          compression-level: 9
